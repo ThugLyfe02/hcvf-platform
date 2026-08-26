@@ -17,16 +17,25 @@ class CampaignStatus(str, enum.Enum):
     running = "running"
     completed = "completed"
     failed = "failed"
+    cancelled = "cancelled"
 
 
 class Campaign(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "campaigns"
 
-    tenant_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    tenant_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        index=True,
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     target_url: Mapped[str] = mapped_column(Text, nullable=False)
     authorization_attested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    status: Mapped[CampaignStatus] = mapped_column(Enum(CampaignStatus, name="campaign_status"), nullable=False, default=CampaignStatus.draft)
+    status: Mapped[CampaignStatus] = mapped_column(
+        Enum(CampaignStatus, name="campaign_status"),
+        nullable=False,
+        default=CampaignStatus.draft,
+    )
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     tenant = relationship("Tenant", back_populates="campaigns")
