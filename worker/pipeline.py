@@ -83,23 +83,24 @@ class CampaignPipeline:
             )
         except Exception as exc:
             self.db.rollback()
-            run = self.db.get(Run, run_id)
-            if run is None:
+            failed_run = self.db.get(Run, run_id)
+            if failed_run is None:
                 raise
-            campaign = self.db.get(Campaign, run.campaign_id)
-            run.status = RunStatus.failed
-            run.completed_at = datetime.now(timezone.utc)
-            run.error_message = f"{exc.__class__.__name__}: {exc}"
-            if campaign is not None:
-                campaign.status = CampaignStatus.failed
+
+            failed_campaign = self.db.get(Campaign, failed_run.campaign_id)
+            failed_run.status = RunStatus.failed
+            failed_run.completed_at = datetime.now(timezone.utc)
+            failed_run.error_message = f"{exc.__class__.__name__}: {exc}"
+            if failed_campaign is not None:
+                failed_campaign.status = CampaignStatus.failed
             self.db.commit()
 
             logger.exception(
                 "campaign run failed",
                 extra={
-                    "run_id": run.id,
-                    "campaign_id": run.campaign_id,
-                    "tenant_id": run.tenant_id,
+                    "run_id": failed_run.id,
+                    "campaign_id": failed_run.campaign_id,
+                    "tenant_id": failed_campaign.tenant_id if failed_campaign is not None else None,
                 },
             )
             raise
