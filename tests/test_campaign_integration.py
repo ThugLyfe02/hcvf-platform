@@ -34,12 +34,12 @@ def test_campaign_can_be_created_and_executed_end_to_end(monkeypatch) -> None:
         target_url = f"http://127.0.0.1:{server.server_address[1]}/"
 
         def execute_synchronously(run_id: str) -> None:
-            execute_campaign.apply(args=[run_id], throw=True).get()
+            execute_campaign.run(run_id)
 
         monkeypatch.setattr("app.api.v1.campaigns.execute_campaign.delay", execute_synchronously)
 
         with TestClient(app) as client:
-            headers = {settings.api_key_header: settings.hcvf_api_keys[0]}
+            headers = {settings.api_key_header: settings.api_keys[0]}
             create_response = client.post(
                 "/api/v1/campaigns",
                 headers=headers,
