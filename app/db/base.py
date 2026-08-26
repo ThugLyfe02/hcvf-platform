@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import DateTime
@@ -33,3 +32,13 @@ class TimestampMixin:
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def import_models() -> None:
+    from app.models.audit import AuditLog
+    from app.models.campaign import Campaign
+    from app.models.finding import Finding
+    from app.models.run import Run
+    from app.models.tenant import Tenant
+
+    _ = (Tenant, Campaign, Run, Finding, AuditLog)
