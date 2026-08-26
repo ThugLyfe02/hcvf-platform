@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from sqlalchemy import select
@@ -26,6 +27,11 @@ class CampaignService:
         actor: str,
         request_id: str | None,
     ) -> Campaign:
+        if not authorization_attested:
+            raise ValueError("Campaign cannot be created without authorization attestation")
+        if not self._is_authorized_target(target_url, tenant.authorized_targets):
+            raise ValueError("Campaign target is not authorized for this tenant")
+
         campaign = Campaign(
             tenant_id=tenant.id,
             name=name,
@@ -149,3 +155,26 @@ class CampaignService:
         for run in runs:
             self.db.refresh(run)
         return runs
+
+    @staticmethod
+    def _is_authorized_target(target_url: str, authorized_targets: list[str]) -> bool:
+        target = urlsplit(target_url)
+        if not target.scheme or not target.hostname:
+            return False
+
+        target_scheme = target.scheme.lower()
+        target_host = target.hostname.lower()
+        target_port = target.port
+
+        for authorized in authorized_targets:
+            candidate = urlsplit(authorized)
+            if not candidate.scheme or not candidate.hostname:
+                continue
+            if candidate.scheme.lower() != target_scheme:
+                continue
+            if candidate.hostname.lower() != target_host:
+                continue
+            if candidate.port != target_port:
+                continue
+            return True
+        return False
