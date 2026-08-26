@@ -5,7 +5,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.responses import Response
 
 from app.db.session import SessionLocal
-from app.models import AuditLog
+from app.services.audit_service import AuditService
 
 _MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
@@ -27,20 +27,18 @@ class AuditMiddleware(BaseHTTPMiddleware):
         resource_id = self._resource_id(request.url.path)
 
         with SessionLocal() as db:
-            db.add(
-                AuditLog(
-                    tenant_id=tenant_id,
-                    actor=actor,
-                    action=f"{request.method.lower()} {request.url.path}",
-                    resource_type=resource_type,
-                    resource_id=resource_id,
-                    request_id=request_id,
-                    detail={
-                        "method": request.method,
-                        "path": request.url.path,
-                        "status_code": response.status_code,
-                    },
-                )
+            AuditService(db).record(
+                tenant_id=tenant_id,
+                action=f"{request.method.lower()} {request.url.path}",
+                details={
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status_code": response.status_code,
+                },
+                user_id=actor,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                request_id=request_id,
             )
             db.commit()
 
