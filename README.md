@@ -197,18 +197,20 @@ The API applies `alembic upgrade head` before startup. PostgreSQL and Redis use 
 
 ## Campaign API example
 
-Create an authorized campaign:
+The configured development tenant is provisioned with loopback authorization for local validation. Create a local authorized campaign with:
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/campaigns \
   -H 'Content-Type: application/json' \
   -H 'X-API-Key: dev-hcvf-key' \
   -d '{
-    "name": "owned-service validation",
-    "target_url": "https://service.example.test/",
+    "name": "local-owned-service validation",
+    "target_url": "http://127.0.0.1:8001/",
     "authorization_attested": true
   }'
 ```
+
+For non-loopback targets, add the owned/authorized URL to the tenant's `authorized_targets` before creating a campaign.
 
 List campaigns:
 
