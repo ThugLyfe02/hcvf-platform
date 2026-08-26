@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter
 from redis import Redis
 from sqlalchemy import text
 
@@ -29,7 +29,7 @@ def _check_redis() -> None:
 
 
 @router.get("/health")
-def health(response: Response) -> dict[str, object]:
+def health() -> dict[str, object]:
     dependencies: dict[str, dict[str, object]] = {
         "postgres": {"status": "down"},
         "redis": {"status": "down"},
@@ -74,9 +74,6 @@ def health(response: Response) -> dict[str, object]:
         }
 
     healthy = all(dep["status"] == "ok" for dep in dependencies.values())
-    if not healthy:
-        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-
     return {
         "status": "ok" if healthy else "degraded",
         "dependencies": dependencies,
