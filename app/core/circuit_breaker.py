@@ -29,20 +29,22 @@ class CircuitBreaker:
         self._state = CircuitState.closed
         self._failure_count = 0
         self._opened_at: float | None = None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+
+    def _current_state(self) -> CircuitState:
+        if self._state == CircuitState.open and self._opened_at is not None:
+            if time.monotonic() - self._opened_at >= self.recovery_timeout:
+                self._state = CircuitState.half_open
+        return self._state
 
     @property
     def state(self) -> CircuitState:
         with self._lock:
-            if self._state == CircuitState.open and self._opened_at is not None:
-                if time.monotonic() - self._opened_at >= self.recovery_timeout:
-                    self._state = CircuitState.half_open
-            return self._state
+            return self._current_state()
 
     def call(self, func: Callable[..., T], *args, **kwargs) -> T:
         with self._lock:
-            state = self.state
-            if state == CircuitState.open:
+            if self._current_state() == CircuitState.open:
                 raise CircuitOpenError("Circuit breaker is open")
         try:
             result = func(*args, **kwargs)
