@@ -2,83 +2,152 @@
 
 **Hybrid Concolic Validation Fabric**
 
-An autonomous defensive security validation platform engineered for discovering, triaging, and remediating vulnerabilities across systems you own or are explicitly authorized to test.
+HCVF is an authorized defensive security validation control plane built with FastAPI, Celery, PostgreSQL, and Redis. Campaigns are tenant-scoped, require explicit authorization attestation before execution, and produce auditable run state.
 
-> **Critical Notice:**  
-> This platform is strictly for authorized defensive security operations.  
-> Do not deploy or execute it against any system without explicit written authorization.
+> **Authorized use only:** Execute HCVF only against systems you own or are explicitly authorized to test. It is not intended for unauthorized third-party scanning or bug-bounty automation against targets without permission.
 
----
+## Current operational baseline
 
-## Overview
+- FastAPI campaign control plane
+- API-key tenant isolation
+- PostgreSQL persistence via SQLAlchemy 2 and psycopg 3
+- Alembic migrations with all application models registered in metadata
+- Celery worker execution through Redis
+- Scheduler loop for due campaigns
+- Bounded HTTP target validation through `FuzzRunner`
+- Structured JSON logging
+- Prometheus metrics at `/metrics`
+- PostgreSQL and Redis health checks at `/health`
+- Redis-backed fixed-window API rate limiting
+- Request IDs via `X-Request-ID`
+- Audit records for mutating campaign API operations
+- End-to-end integration test for campaign creation and execution
 
-HCVF is a modular security validation fabric that orchestrates campaign-based fuzzing, static analysis, intelligent triage, policy-driven remediation, structured reporting, and immutable audit logging.
+## Requirements
 
-It is designed to reduce manual security toil while maintaining strict operational control and full auditability.
-
----
-
-## System Architecture
-
-| Component   | Technology   | Responsibility                              |
-|-------------|--------------|---------------------------------------------|
-| API         | FastAPI      | Campaign management and control plane        |
-| Worker      | Celery       | Asynchronous task execution                  |
-| Scheduler   | Celery Beat  | Automated campaign scheduling                |
-| Database    | PostgreSQL   | Persistent state and tenant isolation        |
-| Broker      | Redis        | Message queue and result backend             |
-
----
-
-## Core Capabilities
-
-- Campaign creation, scheduling, and cancellation
-- Fuzzing with AddressSanitizer instrumentation
-- Static analysis for constraint extraction
-- Severity triage and deduplication
-- Policy-based remediation
-- Structured report generation
-- Immutable audit trail
-- Tenant isolation via API key authentication
-
----
-
-## Prerequisites
-
-- Python 3.11+
-- Docker
-- Docker Compose
+- Python 3.13
 - PostgreSQL 16
 - Redis 7
+- Docker and Docker Compose, if using containers
 
----
+## Configuration
 
-## Installation
+Copy the example configuration and change the development API key before using the service outside a local environment:
 
 ```bash
-# Clone the repository
-git clone https://github.com/ThugLyfe02/hcvf-platform.git
-
-# Enter the project directory
-cd hcvf-platform
-
-# Create environment configuration
 cp .env.example .env
+```
 
-# Install Python dependencies
+The default local database URL uses psycopg 3:
+
+```text
+postgresql+psycopg://hcvf:password@localhost:5432/hcvf
+```
+
+Configured API keys are supplied as a comma-separated `HCVF_API_KEYS` value. On application bootstrap, each configured key is hashed with SHA-256 and provisioned to a tenant record; plaintext keys are not stored in PostgreSQL.
+
+## Local startup
+
+Install dependencies:
+
+```bash
+python3.13 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
+```
 
-# Start supporting services
-docker-compose up -d postgres redis
+Start PostgreSQL and Redis:
 
-# Apply database migrations
+```bash
+docker compose up -d postgres redis
+```
+
+Initialize the database and provision configured tenants:
+
+```bash
+python -m app.db.init_db
+```
+
+Equivalent migration-only command:
+
+```bash
 alembic upgrade head
+```
 
-# Start the API
+Start the API:
+
+```bash
 uvicorn app.main:app --reload
+```
 
-# In a separate terminal, start the worker
-celery -A worker.celery_app worker --loglevel=info
+Start a worker in another shell:
 
-# In another terminal, start the scheduler
-celery -A worker.celery_app beat --loglevel=info
+```bash
+celery -A worker.celery_app:celery_app worker --loglevel=info
+```
+
+Start the scheduler in another shell:
+
+```bash
+python -m worker.scheduler
+```
+
+## Docker Compose
+
+The full stack applies `alembic upgrade head` before API startup:
+
+```bash
+docker compose up --build
+```
+
+## API example
+
+Create an authorized campaign:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/campaigns \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-hcvf-key' \
+  -d '{
+    "name": "owned-service validation",
+    "target_url": "https://service.example.test/",
+    "authorization_attested": true
+  }'
+```
+
+Execute it using the returned campaign ID:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/campaigns/<campaign-id>/execute \
+  -H 'X-API-Key: dev-hcvf-key'
+```
+
+## Operational endpoints
+
+```text
+GET /health
+GET /metrics
+```
+
+`/health` returns HTTP 503 when PostgreSQL or Redis is unavailable. Rate limiting intentionally fails closed with HTTP 503 if Redis cannot enforce the configured limit.
+
+## Tests
+
+With PostgreSQL and Redis running and the database migrated:
+
+```bash
+pytest -q
+```
+
+The campaign integration test starts a local authorized HTTP fixture, creates a campaign through FastAPI, executes the Celery task synchronously, and verifies the persisted run and finding.
+
+## Alembic development workflow
+
+All models are imported by `app/models/__init__.py`, and `alembic/env.py` points `target_metadata` at the shared declarative `Base`. New schema changes can therefore be generated with:
+
+```bash
+alembic revision --autogenerate -m "describe change"
+alembic upgrade head
+```
+
+Review generated migrations before applying them.
