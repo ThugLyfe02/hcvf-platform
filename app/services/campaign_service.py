@@ -10,7 +10,7 @@ from app.models import AuditLog, Campaign, CampaignStatus, Run, RunStatus, Tenan
 
 
 class CampaignService:
-    def __init__(self, db: Session):
+    def __init__(self, db: Session) -> None:
         self.db = db
 
     def create_campaign(
@@ -41,16 +41,55 @@ class CampaignService:
             resource_type="campaign",
             resource_id=str(campaign.id),
             request_id=request_id,
-            detail={"name": name, "target_url": target_url, "scheduled_at": scheduled_at.isoformat() if scheduled_at else None},
+            detail={
+                "name": name,
+                "target_url": target_url,
+                "scheduled_at": scheduled_at.isoformat() if scheduled_at else None,
+            },
         )
         self.db.commit()
         self.db.refresh(campaign)
         return campaign
 
+    def list_campaigns(self, *, tenant_id: UUID) -> list[Campaign]:
+        return list(
+            self.db.scalars(
+                select(Campaign)
+                .where(Campaign.tenant_id == tenant_id)
+                .order_by(Campaign.created_at.desc())
+            )
+        )
+
     def get_campaign(self, *, tenant_id: UUID, campaign_id: UUID) -> Campaign | None:
         return self.db.scalar(
             select(Campaign).where(Campaign.id == campaign_id, Campaign.tenant_id == tenant_id)
         )
+
+    def cancel_campaign(
+        self,
+        *,
+        campaign: Campaign,
+        actor: str,
+        request_id: str | None,
+    ) -> Campaign:
+        if campaign.status in {CampaignStatus.completed, CampaignStatus.failed, CampaignStatus.cancelled}:
+            raise ValueError(f"Campaign in {campaign.status.value} state cannot be cancelled")
+        if campaign.status == CampaignStatus.running:
+            raise ValueError("Running campaign cannot be cancelled through the control plane")
+
+        campaign.status = CampaignStatus.cancelled
+        self._audit(
+            tenant_id=campaign.tenant_id,
+            actor=actor,
+            action="campaign.cancel",
+            resource_type="campaign",
+            resource_id=str(campaign.id),
+            request_id=request_id,
+            detail={},
+        )
+        self.db.commit()
+        self.db.refresh(campaign)
+        return campaign
 
     def create_run(
         self,
@@ -63,6 +102,8 @@ class CampaignService:
             raise ValueError("Campaign cannot execute without authorization attestation")
         if campaign.status == CampaignStatus.running:
             raise ValueError("Campaign is already running")
+        if campaign.status == CampaignStatus.cancelled:
+            raise ValueError("Cancelled campaign cannot execute")
 
         run = Run(campaign_id=campaign.id, status=RunStatus.queued)
         campaign.status = CampaignStatus.queued
