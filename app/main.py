@@ -11,23 +11,26 @@ from app.core.audit_middleware import AuditMiddleware
 from app.core.logging import setup_logging
 from app.core.rate_limit import RateLimitMiddleware
 from app.core.request_id import RequestIDMiddleware
+from app.core.security_headers import SecurityHeadersMiddleware
 from app.db.session import engine
 from app.services.bootstrap import provision_configured_tenants
-
-setup_logging()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    setup_logging()
     provision_configured_tenants()
-    yield
-
-    for middleware in app.user_middleware:
-        instance = getattr(middleware, "cls", None)
-        if instance is RateLimitMiddleware:
-            break
-
-    engine.dispose()
+    try:
+        yield
+    finally:
+        middleware_stack = app.middleware_stack
+        current = middleware_stack
+        while current is not None:
+            if isinstance(current, RateLimitMiddleware):
+                await current.close()
+                break
+            current = getattr(current, "app", None)
+        engine.dispose()
 
 
 app = FastAPI(
@@ -36,6 +39,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(AuditMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(RequestIDMiddleware)
