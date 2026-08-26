@@ -28,18 +28,18 @@ HCVF is an authorized defensive security validation control plane built with Fas
 - Centralized audit service for mutating operations
 - Campaign creation, listing, retrieval, cancellation, and execution
 - Tenant creation, listing, retrieval, and authorized-target updates
-- Integration tests covering API campaign, tenant, security-header, and execution flows
+- Integration tests covering API campaign, tenant, security-header, smoke, and execution flows
 
 ## Requirements
 
 - Python 3.13
 - PostgreSQL 16
 - Redis 7
-- Docker and Docker Compose, if using containers
+- Docker with Docker Compose
 
 ## Configuration
 
-Copy the example configuration and change the development API key before using the service outside a local environment:
+Create local configuration from the safe development template:
 
 ```bash
 cp .env.example .env
@@ -53,61 +53,105 @@ postgresql+psycopg://hcvf:password@localhost:5432/hcvf
 
 Configured API keys are supplied as a comma-separated `HCVF_API_KEYS` value. On application bootstrap, each configured key is hashed with SHA-256 and provisioned to a tenant record; plaintext keys are not stored in PostgreSQL.
 
-## Local startup
+## Local environment
 
-Install dependencies:
+Create a Python environment and install dependencies:
 
 ```bash
 python3.13 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
+cp .env.example .env
 ```
 
-Start PostgreSQL and Redis:
+## Validation
+
+The repository includes four scripts intended to be run in this order by a developer validating a fresh clone:
 
 ```bash
-docker compose up -d postgres redis
+./scripts/bootstrap.sh
+./scripts/diagnostics.sh
+./scripts/test.sh
+./scripts/smoke_test.sh
 ```
 
-Initialize the database and provision configured tenants:
+### `./scripts/bootstrap.sh`
 
-```bash
-python -m app.db.init_db
+Starts only PostgreSQL and Redis through Docker Compose, waits until both containers report healthy, and then applies all Alembic migrations through `alembic upgrade head`. If `.env` does not exist, the script creates it from `.env.example`.
+
+Expected successful output resembles:
+
+```text
+Starting PostgreSQL and Redis...
+postgres is healthy
+redis is healthy
+Applying Alembic migrations...
+HCVF bootstrap complete: PostgreSQL and Redis are healthy and migrations are at head.
 ```
 
-Equivalent migration-only command:
+### `./scripts/diagnostics.sh`
 
-```bash
-alembic upgrade head
+Checks the local prerequisites and reports each item independently:
+
+- Docker daemon availability
+- Python 3.13
+- required Python imports
+- PostgreSQL container state
+- Redis container state
+- `.env` presence
+
+Expected successful output resembles:
+
+```text
+HCVF diagnostics
+================
+[OK]   Docker daemon                running
+[OK]   Python version               3.13.x
+[OK]   Python packages              all required packages import successfully
+[OK]   postgres container           running (healthy)
+[OK]   redis container              running (healthy)
+[OK]   .env file                    present
+================
+HCVF diagnostics: ALL CHECKS PASSED
 ```
 
-Start the API:
+### `./scripts/test.sh`
 
-```bash
-uvicorn app.main:app --reload
+Runs the complete pytest suite with verbose output and `-x`, so execution stops immediately at the first failing test. It exits nonzero on failure and prints an explicit summary.
+
+Expected final line on success:
+
+```text
+HCVF TESTS: PASSED
 ```
 
-Start a worker in another shell:
+### `./scripts/smoke_test.sh`
 
-```bash
-celery -A worker.celery_app:celery_app worker --loglevel=info
+Starts `uvicorn app.main:app` in the background, waits for the API to answer, validates the `/health` JSON contract, and verifies that `/metrics` returns Prometheus exposition text. The API process is always terminated when the script exits.
+
+A degraded health response is accepted as a valid API response for smoke-test purposes because it proves the API is reachable and dependency state is being reported correctly. After `bootstrap.sh`, normal local output should be healthy.
+
+Expected successful output resembles:
+
+```text
+Starting HCVF API on http://127.0.0.1:8000...
+Health endpoint: PASS (HTTP 200)
+Health payload: {"status":"ok",...}
+Metrics endpoint: PASS (HTTP 200, Prometheus exposition detected)
+HCVF SMOKE TEST: PASSED
 ```
 
-Start the scheduler in another shell:
-
-```bash
-python -m worker.scheduler
-```
+The smoke test defaults to port `8000`, a 30-second startup timeout, and `/tmp/hcvf-smoke-uvicorn.log`. They can be overridden with `HCVF_SMOKE_PORT`, `HCVF_SMOKE_TIMEOUT`, and `HCVF_SMOKE_LOG`.
 
 ## Docker Compose
 
-The full stack applies `alembic upgrade head` before API startup and persists PostgreSQL and Redis data using named volumes:
+Start the complete stack:
 
 ```bash
 docker compose up --build
 ```
 
-All services use restart policies and health checks. The API health check calls `/health`; the worker uses Celery inspect ping; the scheduler verifies Redis connectivity.
+The API applies `alembic upgrade head` before startup. PostgreSQL and Redis use named persistent volumes. API, worker, and scheduler use `restart: unless-stopped`. Every service has a health check.
 
 ## Campaign API example
 
@@ -223,7 +267,7 @@ Strict-Transport-Security: max-age=31536000; includeSubDomains
 Content-Security-Policy: default-src 'self'
 ```
 
-These headers reduce MIME-sniffing, framing, legacy reflected-XSS, transport downgrade, and unintended content-source exposure risks. HSTS is intended for HTTPS deployments; terminate TLS appropriately in front of HCVF when deployed beyond local development.
+HSTS is intended for HTTPS deployments; terminate TLS appropriately in front of HCVF when deployed beyond local development.
 
 ## Circuit breaker
 
@@ -260,13 +304,13 @@ POST, PUT, PATCH, and DELETE operations are written to the `audit_logs` table wh
 
 ## Tests
 
-With PostgreSQL and Redis running and the database migrated:
+After bootstrap, run:
 
 ```bash
-pytest -q
+./scripts/test.sh
 ```
 
-`tests/test_campaign_flow.py` verifies campaign creation, listing, and cancellation. `tests/test_tenant_flow.py` verifies tenant creation, listing, retrieval, and authorized-target updates. `tests/test_security_headers.py` verifies the required response headers. The execution integration test starts a local authorized HTTP fixture, executes the Celery task synchronously, and verifies the persisted run and finding.
+`tests/test_campaign_flow.py` verifies campaign creation, listing, and cancellation. `tests/test_tenant_flow.py` verifies tenant creation, listing, retrieval, and authorized-target updates. `tests/test_security_headers.py` verifies required response headers. `tests/test_smoke.py` verifies root reachability, health, and metrics. The execution integration test starts a local authorized HTTP fixture, executes the Celery task synchronously, and verifies the persisted run and finding.
 
 ## Alembic development workflow
 
