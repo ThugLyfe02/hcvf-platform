@@ -27,5 +27,7 @@ def test_api_root_is_reachable() -> None:
     with TestClient(app) as client:
         response = client.get("/")
 
-    assert response.status_code in {200, 404}
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload == {"service": "hcvf", "status": "ok"}
     assert response.headers.get("x-request-id")
