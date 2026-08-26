@@ -1,30 +1,39 @@
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: hcvf
       POSTGRES_PASSWORD: password
       POSTGRES_DB: hcvf
     ports:
       - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U hcvf -d hcvf"]
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 5s
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 5s
 
   api:
     build: .
+    restart: unless-stopped
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
     ports:
       - "8000:8000"
@@ -44,9 +53,16 @@ services:
       LOG_LEVEL: INFO
       RATE_LIMIT_REQUESTS: "120"
       RATE_LIMIT_WINDOW_SECONDS: "60"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
 
   worker:
     build: .
+    restart: unless-stopped
     command: celery -A worker.celery_app:celery_app worker --loglevel=info
     depends_on:
       postgres:
@@ -54,9 +70,16 @@ services:
       redis:
         condition: service_healthy
     environment: *hcvf-env
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A worker.celery_app:celery_app inspect ping -d celery@$$HOSTNAME --timeout=5 | grep -q pong"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
 
   scheduler:
     build: .
+    restart: unless-stopped
     command: python -m worker.scheduler
     depends_on:
       postgres:
@@ -64,3 +87,13 @@ services:
       redis:
         condition: service_healthy
     environment: *hcvf-env
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,redis; r=redis.Redis.from_url(os.environ['REDIS_URL']); raise SystemExit(0 if r.ping() else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  postgres_data:
+  redis_data:
