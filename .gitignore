@@ -1,0 +1,12 @@
+.env
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+fuzz_env/
+logs/
+postgres_data/
+redis_data/
+*.log
+.coverage
+htmlcov/
