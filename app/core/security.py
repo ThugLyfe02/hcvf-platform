@@ -20,7 +20,7 @@ def hash_api_key(api_key: str) -> str:
 
 
 def validate_configured_api_key(api_key: str) -> bool:
-    return any(secrets.compare_digest(api_key, configured) for configured in settings.hcvf_api_keys)
+    return any(secrets.compare_digest(api_key, configured) for configured in settings.api_keys)
 
 
 def get_current_tenant(
