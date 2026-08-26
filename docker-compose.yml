@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
+    container_name: hcvf-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: hcvf
@@ -19,6 +20,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    container_name: hcvf-redis
     restart: unless-stopped
     ports:
       - "6379:6379"
@@ -33,6 +35,7 @@ services:
 
   api:
     build: .
+    container_name: hcvf-api
     restart: unless-stopped
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
     ports:
@@ -53,6 +56,7 @@ services:
       LOG_LEVEL: INFO
       RATE_LIMIT_REQUESTS: "120"
       RATE_LIMIT_WINDOW_SECONDS: "60"
+      SCHEDULER_INTERVAL_SECONDS: "5"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
       interval: 10s
@@ -62,6 +66,7 @@ services:
 
   worker:
     build: .
+    container_name: hcvf-worker
     restart: unless-stopped
     command: celery -A worker.celery_app:celery_app worker --loglevel=info
     depends_on:
@@ -79,6 +84,7 @@ services:
 
   scheduler:
     build: .
+    container_name: hcvf-scheduler
     restart: unless-stopped
     command: python -m worker.scheduler
     depends_on:
@@ -96,4 +102,6 @@ services:
 
 volumes:
   postgres_data:
+    name: hcvf-postgres-data
   redis_data:
+    name: hcvf-redis-data
