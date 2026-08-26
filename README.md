@@ -14,14 +14,15 @@ HCVF is an authorized defensive security validation control plane built with Fas
 - Alembic migrations with all application models registered in metadata
 - Celery worker execution through Redis
 - Scheduler loop for due campaigns
-- Bounded HTTP target validation through `FuzzRunner`
+- Bounded authorized target validation through `FuzzRunner`
 - Structured JSON logging
 - Prometheus metrics at `/metrics`
 - PostgreSQL and Redis health checks at `/health`
 - Redis-backed fixed-window API rate limiting
 - Request IDs via `X-Request-ID`
-- Audit records for mutating campaign API operations
-- End-to-end integration test for campaign creation and execution
+- Audit records for mutating API operations
+- Campaign creation, listing, retrieval, cancellation, and execution
+- Integration tests covering API campaign flow and execution
 
 ## Requirements
 
@@ -94,11 +95,13 @@ python -m worker.scheduler
 
 ## Docker Compose
 
-The full stack applies `alembic upgrade head` before API startup:
+The full stack applies `alembic upgrade head` before API startup and persists PostgreSQL and Redis data using named volumes:
 
 ```bash
 docker compose up --build
 ```
+
+All services use restart policies and health checks. The API health check calls `/health`; the worker uses Celery inspect ping; the scheduler verifies Redis connectivity.
 
 ## API example
 
@@ -115,6 +118,20 @@ curl -X POST http://localhost:8000/api/v1/campaigns \
   }'
 ```
 
+List campaigns:
+
+```bash
+curl http://localhost:8000/api/v1/campaigns \
+  -H 'X-API-Key: dev-hcvf-key'
+```
+
+Cancel a non-running campaign:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/campaigns/<campaign-id>/cancel \
+  -H 'X-API-Key: dev-hcvf-key'
+```
+
 Execute it using the returned campaign ID:
 
 ```bash
@@ -122,14 +139,77 @@ curl -X POST http://localhost:8000/api/v1/campaigns/<campaign-id>/execute \
   -H 'X-API-Key: dev-hcvf-key'
 ```
 
-## Operational endpoints
+## Logging
+
+HCVF emits structured JSON logs to stdout from both FastAPI and Celery. Each record includes:
+
+- `timestamp`
+- `level`
+- `message`
+- `logger`
+- exception details when present
+
+Operational context such as `request_id`, `tenant_id`, `campaign_id`, `run_id`, task duration, and finding identifiers is included as structured fields when available. Container runtimes can forward stdout directly to a centralized logging system without custom file rotation inside HCVF.
+
+## Metrics
+
+Prometheus metrics are exposed at:
 
 ```text
-GET /health
 GET /metrics
 ```
 
-`/health` returns HTTP 503 when PostgreSQL or Redis is unavailable. Rate limiting intentionally fails closed with HTTP 503 if Redis cannot enforce the configured limit.
+The endpoint includes application metrics such as:
+
+- `hcvf_campaigns_created_total`
+- `hcvf_campaigns_completed_total`
+- `hcvf_findings_detected_total`
+- `hcvf_task_duration_seconds`
+
+Prometheus can scrape the API service directly at `http://<api-host>:8000/metrics`.
+
+## Health checks
+
+Dependency health is exposed at:
+
+```text
+GET /health
+```
+
+The handler executes `SELECT 1` against PostgreSQL and `PING` against Redis. A fully healthy response returns HTTP 200 with `status: ok`. If either dependency is unavailable, HCVF returns HTTP 503 with `status: degraded` and per-dependency state.
+
+Example:
+
+```json
+{
+  "status": "ok",
+  "dependencies": {
+    "postgres": {"status": "ok"},
+    "redis": {"status": "ok"}
+  }
+}
+```
+
+## Request IDs
+
+Every request receives an `X-Request-ID`. If the client supplies one, HCVF propagates it; otherwise HCVF generates a UUID. The request ID is stored in request state, propagated using `contextvars`, returned in the response header, and included in audit/logging context where applicable.
+
+## Rate limiting
+
+API traffic is protected by a Redis-backed fixed-window limiter. `/health` and `/metrics` are excluded so orchestration and monitoring remain functional.
+
+Configuration:
+
+```text
+RATE_LIMIT_REQUESTS=120
+RATE_LIMIT_WINDOW_SECONDS=60
+```
+
+The limiter keys requests by a SHA-256-derived identifier rather than storing plaintext API keys in Redis. Requests exceeding the configured limit receive HTTP 429 and a `Retry-After` header. If Redis is unavailable, protected requests fail closed with HTTP 503 because the service cannot reliably enforce the configured policy.
+
+## Audit logging
+
+POST, PUT, PATCH, and DELETE operations are written to the `audit_logs` table when an authenticated tenant is present. GET operations are not written by the audit middleware. Audit records include tenant, actor, action, resource context, request ID, response status, and timestamps.
 
 ## Tests
 
@@ -139,7 +219,7 @@ With PostgreSQL and Redis running and the database migrated:
 pytest -q
 ```
 
-The campaign integration test starts a local authorized HTTP fixture, creates a campaign through FastAPI, executes the Celery task synchronously, and verifies the persisted run and finding.
+`tests/test_campaign_flow.py` verifies campaign creation, listing, and cancellation through FastAPI. The execution integration test starts a local authorized HTTP fixture, executes the Celery task synchronously, and verifies the persisted run and finding.
 
 ## Alembic development workflow
 
