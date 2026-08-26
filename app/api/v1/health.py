@@ -11,25 +11,41 @@ router = APIRouter(tags=["health"])
 
 
 @router.get("/health")
-def health(response: Response) -> dict:
-    checks = {"postgres": False, "redis": False}
-    errors: dict[str, str] = {}
+def health(response: Response) -> dict[str, object]:
+    dependencies: dict[str, dict[str, object]] = {
+        "postgres": {"status": "down"},
+        "redis": {"status": "down"},
+    }
 
     try:
         with SessionLocal() as db:
             db.execute(text("SELECT 1"))
-        checks["postgres"] = True
+        dependencies["postgres"] = {"status": "ok"}
     except Exception as exc:
-        errors["postgres"] = exc.__class__.__name__
+        dependencies["postgres"] = {
+            "status": "down",
+            "error": exc.__class__.__name__,
+        }
 
+    redis_client: Redis | None = None
     try:
-        client = Redis.from_url(settings.redis_url, decode_responses=True)
-        checks["redis"] = bool(client.ping())
+        redis_client = Redis.from_url(settings.redis_url, decode_responses=True)
+        redis_ok = bool(redis_client.ping())
+        dependencies["redis"] = {"status": "ok" if redis_ok else "down"}
     except Exception as exc:
-        errors["redis"] = exc.__class__.__name__
+        dependencies["redis"] = {
+            "status": "down",
+            "error": exc.__class__.__name__,
+        }
+    finally:
+        if redis_client is not None:
+            redis_client.close()
 
-    healthy = all(checks.values())
+    healthy = all(dep["status"] == "ok" for dep in dependencies.values())
     if not healthy:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
 
-    return {"status": "ok" if healthy else "degraded", "checks": checks, "errors": errors}
+    return {
+        "status": "ok" if healthy else "degraded",
+        "dependencies": dependencies,
+    }
