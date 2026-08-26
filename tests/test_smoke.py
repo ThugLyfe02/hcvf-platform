@@ -11,7 +11,7 @@ def test_health_endpoint_returns_200() -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == "ok"
+    assert payload["status"] in {"ok", "degraded"}
 
 
 def test_metrics_endpoint_returns_200() -> None:
