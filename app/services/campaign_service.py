@@ -6,12 +6,14 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import AuditLog, Campaign, CampaignStatus, Run, RunStatus, Tenant
+from app.models import Campaign, CampaignStatus, Run, RunStatus, Tenant
+from app.services.audit_service import AuditService
 
 
 class CampaignService:
     def __init__(self, db: Session) -> None:
         self.db = db
+        self.audit = AuditService(db)
 
     def create_campaign(
         self,
@@ -34,18 +36,18 @@ class CampaignService:
         )
         self.db.add(campaign)
         self.db.flush()
-        self._audit(
+        self.audit.record(
             tenant_id=tenant.id,
-            actor=actor,
             action="campaign.create",
-            resource_type="campaign",
-            resource_id=str(campaign.id),
-            request_id=request_id,
-            detail={
+            details={
                 "name": name,
                 "target_url": target_url,
                 "scheduled_at": scheduled_at.isoformat() if scheduled_at else None,
             },
+            user_id=actor,
+            resource_type="campaign",
+            resource_id=str(campaign.id),
+            request_id=request_id,
         )
         self.db.commit()
         self.db.refresh(campaign)
@@ -78,14 +80,14 @@ class CampaignService:
             raise ValueError("Running campaign cannot be cancelled through the control plane")
 
         campaign.status = CampaignStatus.cancelled
-        self._audit(
+        self.audit.record(
             tenant_id=campaign.tenant_id,
-            actor=actor,
             action="campaign.cancel",
+            details={},
+            user_id=actor,
             resource_type="campaign",
             resource_id=str(campaign.id),
             request_id=request_id,
-            detail={},
         )
         self.db.commit()
         self.db.refresh(campaign)
@@ -109,14 +111,14 @@ class CampaignService:
         campaign.status = CampaignStatus.queued
         self.db.add(run)
         self.db.flush()
-        self._audit(
+        self.audit.record(
             tenant_id=campaign.tenant_id,
-            actor=actor,
             action="campaign.execute",
+            details={"run_id": str(run.id)},
+            user_id=actor,
             resource_type="campaign",
             resource_id=str(campaign.id),
             request_id=request_id,
-            detail={"run_id": str(run.id)},
         )
         self.db.commit()
         self.db.refresh(run)
@@ -147,26 +149,3 @@ class CampaignService:
         for run in runs:
             self.db.refresh(run)
         return runs
-
-    def _audit(
-        self,
-        *,
-        tenant_id: UUID,
-        actor: str,
-        action: str,
-        resource_type: str,
-        resource_id: str,
-        request_id: str | None,
-        detail: dict,
-    ) -> None:
-        self.db.add(
-            AuditLog(
-                tenant_id=tenant_id,
-                actor=actor,
-                action=action,
-                resource_type=resource_type,
-                resource_id=resource_id,
-                request_id=request_id,
-                detail=detail,
-            )
-        )
