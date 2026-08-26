@@ -32,6 +32,7 @@ required_files=(
   "requirements.txt"
   "docker-compose.yml"
   ".env.example"
+  "README.md"
   "scripts/bootstrap.sh"
   "scripts/diagnostics.sh"
   "scripts/test.sh"
@@ -94,10 +95,13 @@ else
   fail "psycopg2 references remain"
 fi
 
-if grep -q 'postgresql+psycopg://' .env.example app/core/config.py alembic/env.py docker-compose.yml 2>/dev/null; then
-  pass "psycopg 3 connection configuration is present"
+if grep -q 'postgresql+psycopg://' .env.example \
+  && grep -q 'postgresql+psycopg://' app/core/config.py \
+  && grep -q 'postgresql+psycopg://' docker-compose.yml \
+  && grep -q 'settings.database_url' alembic/env.py; then
+  pass "psycopg 3 database configuration is consistent"
 else
-  fail "Expected postgresql+psycopg:// configuration not found"
+  fail "psycopg 3 database configuration is inconsistent"
 fi
 
 COMPOSE=()
