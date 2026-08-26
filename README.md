@@ -10,6 +10,7 @@ HCVF is an authorized defensive security validation control plane built with Fas
 
 - FastAPI campaign control plane
 - API-key tenant isolation
+- Tenant management with one-time secure API-key issuance
 - PostgreSQL persistence via SQLAlchemy 2 and psycopg 3
 - Alembic migrations with all application models registered in metadata
 - Celery worker execution through Redis
@@ -18,11 +19,16 @@ HCVF is an authorized defensive security validation control plane built with Fas
 - Structured JSON logging
 - Prometheus metrics at `/metrics`
 - PostgreSQL and Redis health checks at `/health`
+- Circuit breakers around dependency health checks
 - Redis-backed fixed-window API rate limiting
+- Redis-backed distributed lock primitive with ownership-safe release
+- Exponential retry utility with jitter
 - Request IDs via `X-Request-ID`
-- Audit records for mutating API operations
+- Security headers on every API response
+- Centralized audit service for mutating operations
 - Campaign creation, listing, retrieval, cancellation, and execution
-- Integration tests covering API campaign flow and execution
+- Tenant creation, listing, retrieval, and authorized-target updates
+- Integration tests covering API campaign, tenant, security-header, and execution flows
 
 ## Requirements
 
@@ -103,7 +109,7 @@ docker compose up --build
 
 All services use restart policies and health checks. The API health check calls `/health`; the worker uses Celery inspect ping; the scheduler verifies Redis connectivity.
 
-## API example
+## Campaign API example
 
 Create an authorized campaign:
 
@@ -139,17 +145,51 @@ curl -X POST http://localhost:8000/api/v1/campaigns/<campaign-id>/execute \
   -H 'X-API-Key: dev-hcvf-key'
 ```
 
+## Tenant management
+
+Tenant administration is available under `/api/v1/tenants`. Every endpoint requires an already provisioned API key. Tenant creation returns a newly generated API key exactly once; only its SHA-256 hash is persisted.
+
+Create a tenant:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/tenants \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-hcvf-key' \
+  -d '{
+    "name": "security-team",
+    "authorized_targets": [
+      "https://owned.example.test",
+      "https://api.owned.example.test"
+    ]
+  }'
+```
+
+List tenants:
+
+```bash
+curl http://localhost:8000/api/v1/tenants \
+  -H 'X-API-Key: dev-hcvf-key'
+```
+
+Retrieve a tenant:
+
+```bash
+curl http://localhost:8000/api/v1/tenants/<tenant-id> \
+  -H 'X-API-Key: dev-hcvf-key'
+```
+
+Update authorized targets:
+
+```bash
+curl -X PATCH http://localhost:8000/api/v1/tenants/<tenant-id> \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-hcvf-key' \
+  -d '{"authorized_targets": ["https://new-owned.example.test"]}'
+```
+
 ## Logging
 
-HCVF emits structured JSON logs to stdout from both FastAPI and Celery. Each record includes:
-
-- `timestamp`
-- `level`
-- `message`
-- `logger`
-- exception details when present
-
-Operational context such as `request_id`, `tenant_id`, `campaign_id`, `run_id`, task duration, and finding identifiers is included as structured fields when available. Container runtimes can forward stdout directly to a centralized logging system without custom file rotation inside HCVF.
+HCVF emits structured JSON logs to stdout from both FastAPI and Celery. Each record includes `timestamp`, `level`, `message`, `logger`, and exception details when present. Operational context such as `request_id`, `tenant_id`, `campaign_id`, `run_id`, task duration, and finding identifiers is included as structured fields when available.
 
 ## Metrics
 
@@ -159,14 +199,7 @@ Prometheus metrics are exposed at:
 GET /metrics
 ```
 
-The endpoint includes application metrics such as:
-
-- `hcvf_campaigns_created_total`
-- `hcvf_campaigns_completed_total`
-- `hcvf_findings_detected_total`
-- `hcvf_task_duration_seconds`
-
-Prometheus can scrape the API service directly at `http://<api-host>:8000/metrics`.
+The endpoint includes application metrics such as `hcvf_campaigns_created_total`, `hcvf_campaigns_completed_total`, `hcvf_findings_detected_total`, and `hcvf_task_duration_seconds`.
 
 ## Health checks
 
@@ -176,19 +209,33 @@ Dependency health is exposed at:
 GET /health
 ```
 
-The handler executes `SELECT 1` against PostgreSQL and `PING` against Redis. A fully healthy response returns HTTP 200 with `status: ok`. If either dependency is unavailable, HCVF returns HTTP 503 with `status: degraded` and per-dependency state.
+The handler executes `SELECT 1` against PostgreSQL and `PING` against Redis. Each dependency check is protected by a circuit breaker. A fully healthy response returns HTTP 200 with `status: ok`. If either dependency is unavailable, HCVF returns HTTP 503 with `status: degraded` and dependency/circuit state.
 
-Example:
+## Security headers
 
-```json
-{
-  "status": "ok",
-  "dependencies": {
-    "postgres": {"status": "ok"},
-    "redis": {"status": "ok"}
-  }
-}
+Every API response includes:
+
+```text
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+X-XSS-Protection: 1; mode=block
+Strict-Transport-Security: max-age=31536000; includeSubDomains
+Content-Security-Policy: default-src 'self'
 ```
+
+These headers reduce MIME-sniffing, framing, legacy reflected-XSS, transport downgrade, and unintended content-source exposure risks. HSTS is intended for HTTPS deployments; terminate TLS appropriately in front of HCVF when deployed beyond local development.
+
+## Circuit breaker
+
+`app/core/circuit_breaker.py` provides dependency isolation with configurable failure thresholds and recovery timeouts. The breaker moves through `closed`, `open`, and `half_open` states. PostgreSQL and Redis health checks use independent breakers so repeated dependency failure does not continuously hammer an unavailable service.
+
+## Distributed locking
+
+`app/core/distributed_lock.py` provides Redis-backed distributed locks using a random UUID owner token and an expiration TTL. Lock acquisition uses Redis `SET NX EX`; release uses an atomic Lua compare-and-delete operation so one process cannot accidentally release a lock owned by another process.
+
+## Retry utility
+
+`app/core/retry.py` provides a synchronous retry decorator with exponential backoff, configurable retry count/base delay, exception filtering, and optional jitter. It is intended for bounded transient-failure handling rather than unbounded retry loops.
 
 ## Request IDs
 
@@ -209,7 +256,7 @@ The limiter keys requests by a SHA-256-derived identifier rather than storing pl
 
 ## Audit logging
 
-POST, PUT, PATCH, and DELETE operations are written to the `audit_logs` table when an authenticated tenant is present. GET operations are not written by the audit middleware. Audit records include tenant, actor, action, resource context, request ID, response status, and timestamps.
+POST, PUT, PATCH, and DELETE operations are written to the `audit_logs` table when an authenticated tenant is present. GET operations are not written by the audit middleware. Service-level audit records are centralized through `AuditService` and include tenant, actor/user identifier, action, resource context, details, request ID, and an explicit timestamp.
 
 ## Tests
 
@@ -219,7 +266,7 @@ With PostgreSQL and Redis running and the database migrated:
 pytest -q
 ```
 
-`tests/test_campaign_flow.py` verifies campaign creation, listing, and cancellation through FastAPI. The execution integration test starts a local authorized HTTP fixture, executes the Celery task synchronously, and verifies the persisted run and finding.
+`tests/test_campaign_flow.py` verifies campaign creation, listing, and cancellation. `tests/test_tenant_flow.py` verifies tenant creation, listing, retrieval, and authorized-target updates. `tests/test_security_headers.py` verifies the required response headers. The execution integration test starts a local authorized HTTP fixture, executes the Celery task synchronously, and verifies the persisted run and finding.
 
 ## Alembic development workflow
 
