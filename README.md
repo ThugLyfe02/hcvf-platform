@@ -196,6 +196,30 @@ HCVF SMOKE TEST: PASSED
 
 The smoke test defaults to port `8000`, a 30-second startup timeout, and `/tmp/hcvf-smoke-uvicorn.log`. They can be overridden with `HCVF_SMOKE_PORT`, `HCVF_SMOKE_TIMEOUT`, and `HCVF_SMOKE_LOG`.
 
+## Operational endpoints
+
+The root endpoint provides a minimal service-liveness response:
+
+```text
+GET /
+```
+
+Expected payload:
+
+```json
+{
+  "service": "hcvf",
+  "status": "ok"
+}
+```
+
+Dependency health and metrics remain available at:
+
+```text
+GET /health
+GET /metrics
+```
+
 ## Docker Compose
 
 Start the complete stack:
