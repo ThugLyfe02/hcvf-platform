@@ -1,0 +1,89 @@
+name: HCVF CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "hcvf/**"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: hcvf
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: hcvf
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hcvf -d hcvf"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Compile application
+        run: python -m compileall -q app worker alembic tests
+
+      - name: Verify PostgreSQL migration and metadata parity
+        env:
+          DATABASE_URL: postgresql+psycopg://hcvf:password@127.0.0.1:5432/hcvf
+          HCVF_API_KEYS: integration-test-api-key
+        run: |
+          python -m alembic upgrade head
+          python -m alembic check
+
+      - name: Verify application import and Compose configuration
+        run: |
+          python -c "from app.main import app; assert app.title == 'HCVF Platform'"
+          docker compose config --quiet
+
+      - name: Run isolated test suite
+        run: pytest -q
+
+      - name: Run PostgreSQL, Redis, Celery, and scheduler integration test
+        env:
+          HCVF_STACK_TEST: "true"
+          ENVIRONMENT: test
+          DATABASE_URL: postgresql+psycopg://hcvf:password@127.0.0.1:5432/hcvf
+          REDIS_URL: redis://127.0.0.1:6379/15
+          CELERY_BROKER_URL: redis://127.0.0.1:6379/15
+          CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/15
+          RATE_LIMIT_ENABLED: "false"
+          JSON_LOGS: "false"
+          HCVF_API_KEYS: integration-test-api-key
+          ALLOW_PUBLIC_TARGETS: "false"
+          ALLOWED_TARGET_CIDRS: 127.0.0.0/8,::1/128
+        run: pytest -q tests/test_stack_integration.py

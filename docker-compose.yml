@@ -14,12 +14,13 @@ services:
       test: ["CMD-SHELL", "pg_isready -U hcvf -d hcvf"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 20
       start_period: 5s
 
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "6379:6379"
     volumes:
@@ -28,50 +29,86 @@ services:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 20
       start_period: 5s
 
-  api:
+  migrate:
     build: .
-    restart: unless-stopped
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
-    ports:
-      - "8000:8000"
+    restart: "no"
+    command: ["python", "-m", "app.db.init_db"]
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
-    environment: &hcvf-env
+    environment: &hcvf-environment
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      JSON_LOGS: ${JSON_LOGS:-true}
       DATABASE_URL: postgresql+psycopg://hcvf:password@postgres:5432/hcvf
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
-      API_KEY_HEADER: X-API-Key
-      HCVF_API_KEYS: dev-hcvf-key
-      ENVIRONMENT: development
-      LOG_LEVEL: INFO
-      RATE_LIMIT_REQUESTS: "120"
-      RATE_LIMIT_WINDOW_SECONDS: "60"
+      API_KEY_HEADER: ${API_KEY_HEADER:-X-API-Key}
+      BOOTSTRAP_TENANT_NAME: ${BOOTSTRAP_TENANT_NAME:-HCVF Development Tenant}
+      HCVF_API_KEYS: ${HCVF_API_KEYS:-change-me-before-use}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      RATE_LIMIT_REQUESTS: ${RATE_LIMIT_REQUESTS:-120}
+      RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
+      ALLOW_PUBLIC_TARGETS: ${ALLOW_PUBLIC_TARGETS:-false}
+      ALLOWED_TARGET_CIDRS: ${ALLOWED_TARGET_CIDRS:-127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,::1/128,fc00::/7}
+      TARGET_REQUEST_TIMEOUT_SECONDS: ${TARGET_REQUEST_TIMEOUT_SECONDS:-5.0}
+      TARGET_MAX_RESPONSE_BYTES: ${TARGET_MAX_RESPONSE_BYTES:-1048576}
+      FUZZ_MAX_CASES: ${FUZZ_MAX_CASES:-8}
+      SCHEDULER_POLL_SECONDS: ${SCHEDULER_POLL_SECONDS:-5.0}
+      SCHEDULER_BATCH_SIZE: ${SCHEDULER_BATCH_SIZE:-25}
+
+  api:
+    build: .
+    restart: unless-stopped
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment: *hcvf-environment
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health/ready', timeout=2)",
+        ]
       interval: 10s
-      timeout: 5s
+      timeout: 3s
       retries: 10
-      start_period: 15s
+      start_period: 10s
 
   worker:
     build: .
     restart: unless-stopped
-    command: celery -A worker.celery_app:celery_app worker --loglevel=info
+    command:
+      [
+        "celery",
+        "-A",
+        "worker.celery_app:celery_app",
+        "worker",
+        "--loglevel=INFO",
+      ]
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
-    environment: *hcvf-env
+    environment: *hcvf-environment
     healthcheck:
-      test: ["CMD-SHELL", "celery -A worker.celery_app:celery_app inspect ping -d celery@$$HOSTNAME --timeout=5 | grep -q pong"]
+      test:
+        [
+          "CMD-SHELL",
+          "celery -A worker.celery_app:celery_app inspect ping --timeout=5 | grep -q pong",
+        ]
       interval: 15s
       timeout: 10s
       retries: 5
@@ -80,15 +117,21 @@ services:
   scheduler:
     build: .
     restart: unless-stopped
-    command: python -m worker.scheduler
+    command: ["python", "-m", "worker.scheduler"]
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
-    environment: *hcvf-env
+    environment: *hcvf-environment
     healthcheck:
-      test: ["CMD", "python", "-c", "import os,redis; r=redis.Redis.from_url(os.environ['REDIS_URL']); raise SystemExit(0 if r.ping() else 1)"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "from pathlib import Path; raise SystemExit(0 if b'worker.scheduler' in Path('/proc/1/cmdline').read_bytes() else 1)",
+        ]
       interval: 15s
       timeout: 5s
       retries: 5

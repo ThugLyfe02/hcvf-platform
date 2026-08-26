@@ -1,158 +1,199 @@
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
-from uuid import UUID
+from typing import Any, Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, HttpUrl
+from fastapi import APIRouter, Depends, Request, status
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm import Session
 
-from app.core.errors import bad_request, not_found
-from app.core.metrics import CAMPAIGNS_CREATED
 from app.core.security import get_current_tenant
 from app.db.session import get_db
-from app.models import Campaign, Run, Tenant
-from app.services.campaign_service import CampaignService
-from worker.tasks import execute_campaign
+from app.models.campaign import Campaign, CampaignStatus
+from app.models.finding import Finding, FindingSeverity
+from app.models.run import Run, RunStatus
+from app.models.tenant import Tenant
+from app.services.campaign_service import (
+    cancel_campaign,
+    create_campaign,
+    get_campaign,
+    list_campaign_findings,
+    list_campaign_runs,
+    list_campaigns,
+    request_campaign_execution,
+)
 
-router = APIRouter(prefix="/api/v1/campaigns", tags=["campaigns"])
+router = APIRouter(prefix="/campaigns", tags=["campaigns"])
+DBSession = Annotated[Session, Depends(get_db)]
+AuthenticatedTenant = Annotated[Tenant, Depends(get_current_tenant)]
 
 
 class CampaignCreate(BaseModel):
-    name: str
-    target_url: HttpUrl
-    authorization_attested: bool
-    scheduled_at: datetime | None = None
+    name: str = Field(min_length=1, max_length=200)
+    target_url: str = Field(min_length=8, max_length=2_048)
+    authorization_reference: str = Field(min_length=3, max_length=500)
+    config: dict[str, Any] = Field(default_factory=dict)
+    schedule_at: datetime | None = None
+
+    @field_validator("name", "target_url", "authorization_reference", mode="before")
+    @classmethod
+    def strip_required_text(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
 
 
-class CampaignResponse(BaseModel):
-    id: UUID
-    tenant_id: UUID
+class CampaignRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
     name: str
     target_url: str
-    authorization_attested: bool
-    status: str
-    scheduled_at: datetime | None
+    authorization_reference: str
+    status: CampaignStatus
+    config: dict[str, Any]
+    schedule_at: datetime | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    last_error: str | None
     created_at: datetime
     updated_at: datetime
 
 
-class RunResponse(BaseModel):
-    id: UUID
-    campaign_id: UUID
-    status: str
+class RunRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    campaign_id: uuid.UUID
+    celery_task_id: str | None
+    status: RunStatus
     started_at: datetime | None
     completed_at: datetime | None
-    http_status: int | None
-    error_message: str | None
+    cancel_requested_at: datetime | None
+    summary: dict[str, Any]
+    error: str | None
+    created_at: datetime
+    updated_at: datetime
 
 
-def campaign_to_response(campaign: Campaign) -> CampaignResponse:
-    return CampaignResponse(
-        id=campaign.id,
-        tenant_id=campaign.tenant_id,
-        name=campaign.name,
-        target_url=campaign.target_url,
-        authorization_attested=campaign.authorization_attested,
-        status=campaign.status.value,
-        scheduled_at=campaign.scheduled_at,
-        created_at=campaign.created_at,
-        updated_at=campaign.updated_at,
-    )
+class FindingRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    campaign_id: uuid.UUID
+    run_id: uuid.UUID
+    title: str
+    category: str
+    severity: FindingSeverity
+    fingerprint: str
+    evidence: dict[str, Any]
+    description: str
+    created_at: datetime
 
 
-def run_to_response(run: Run) -> RunResponse:
-    return RunResponse(
-        id=run.id,
-        campaign_id=run.campaign_id,
-        status=run.status.value,
-        started_at=run.started_at,
-        completed_at=run.completed_at,
-        http_status=run.http_status,
-        error_message=run.error_message,
-    )
+class CampaignExecutionRead(BaseModel):
+    campaign: CampaignRead
+    run: RunRead
 
 
-@router.post("", response_model=CampaignResponse, status_code=status.HTTP_201_CREATED)
-def create_campaign(
+class CampaignCancellationRead(BaseModel):
+    campaign: CampaignRead
+    run: RunRead | None
+
+
+@router.post("", response_model=CampaignRead, status_code=status.HTTP_201_CREATED)
+def create_campaign_endpoint(
     payload: CampaignCreate,
     request: Request,
-    tenant: Tenant = Depends(get_current_tenant),
-    db: Session = Depends(get_db),
-) -> CampaignResponse:
-    if not payload.authorization_attested:
-        raise bad_request("authorization_attested must be true for an executable campaign")
-
-    campaign = CampaignService(db).create_campaign(
+    db: DBSession,
+    tenant: AuthenticatedTenant,
+) -> Campaign:
+    return create_campaign(
+        db,
         tenant=tenant,
-        name=payload.name.strip(),
-        target_url=str(payload.target_url),
-        authorization_attested=payload.authorization_attested,
-        scheduled_at=payload.scheduled_at,
-        actor=request.state.actor,
+        name=payload.name,
+        target_url=payload.target_url,
+        authorization_reference=payload.authorization_reference,
+        config=payload.config,
+        schedule_at=payload.schedule_at,
         request_id=request.state.request_id,
     )
-    CAMPAIGNS_CREATED.inc()
-    return campaign_to_response(campaign)
 
 
-@router.get("", response_model=list[CampaignResponse])
-def list_campaigns(
-    tenant: Tenant = Depends(get_current_tenant),
-    db: Session = Depends(get_db),
-) -> list[CampaignResponse]:
-    campaigns = CampaignService(db).list_campaigns(tenant_id=tenant.id)
-    return [campaign_to_response(campaign) for campaign in campaigns]
+@router.get("", response_model=list[CampaignRead])
+def list_campaigns_endpoint(
+    db: DBSession,
+    tenant: AuthenticatedTenant,
+) -> list[Campaign]:
+    return list_campaigns(db, tenant_id=tenant.id)
 
 
-@router.get("/{campaign_id}", response_model=CampaignResponse)
-def get_campaign(
-    campaign_id: UUID,
-    tenant: Tenant = Depends(get_current_tenant),
-    db: Session = Depends(get_db),
-) -> CampaignResponse:
-    campaign = CampaignService(db).get_campaign(tenant_id=tenant.id, campaign_id=campaign_id)
-    if campaign is None:
-        raise not_found("Campaign")
-    return campaign_to_response(campaign)
+@router.get("/{campaign_id}", response_model=CampaignRead)
+def get_campaign_endpoint(
+    campaign_id: uuid.UUID,
+    db: DBSession,
+    tenant: AuthenticatedTenant,
+) -> Campaign:
+    return get_campaign(db, tenant_id=tenant.id, campaign_id=campaign_id)
 
 
-@router.post("/{campaign_id}/cancel", response_model=CampaignResponse)
-def cancel_campaign(
-    campaign_id: UUID,
-    request: Request,
-    tenant: Tenant = Depends(get_current_tenant),
-    db: Session = Depends(get_db),
-) -> CampaignResponse:
-    service = CampaignService(db)
-    campaign = service.get_campaign(tenant_id=tenant.id, campaign_id=campaign_id)
-    if campaign is None:
-        raise not_found("Campaign")
-    try:
-        campaign = service.cancel_campaign(
-            campaign=campaign,
-            actor=request.state.actor,
-            request_id=request.state.request_id,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    return campaign_to_response(campaign)
-
-
-@router.post("/{campaign_id}/execute", response_model=RunResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/{campaign_id}/execute",
+    response_model=CampaignExecutionRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 def execute_campaign_endpoint(
-    campaign_id: UUID,
+    campaign_id: uuid.UUID,
     request: Request,
-    tenant: Tenant = Depends(get_current_tenant),
-    db: Session = Depends(get_db),
-) -> RunResponse:
-    service = CampaignService(db)
-    campaign = service.get_campaign(tenant_id=tenant.id, campaign_id=campaign_id)
-    if campaign is None:
-        raise not_found("Campaign")
-    try:
-        run = service.create_run(campaign=campaign, actor=request.state.actor, request_id=request.state.request_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    execute_campaign.delay(str(run.id))
-    return run_to_response(run)
+    db: DBSession,
+    tenant: AuthenticatedTenant,
+) -> CampaignExecutionRead:
+    campaign, run = request_campaign_execution(
+        db,
+        tenant=tenant,
+        campaign_id=campaign_id,
+        request_id=request.state.request_id,
+    )
+    return CampaignExecutionRead(
+        campaign=CampaignRead.model_validate(campaign),
+        run=RunRead.model_validate(run),
+    )
+
+
+@router.post("/{campaign_id}/cancel", response_model=CampaignCancellationRead)
+def cancel_campaign_endpoint(
+    campaign_id: uuid.UUID,
+    request: Request,
+    db: DBSession,
+    tenant: AuthenticatedTenant,
+) -> CampaignCancellationRead:
+    campaign, run = cancel_campaign(
+        db,
+        tenant=tenant,
+        campaign_id=campaign_id,
+        request_id=request.state.request_id,
+    )
+    return CampaignCancellationRead(
+        campaign=CampaignRead.model_validate(campaign),
+        run=RunRead.model_validate(run) if run is not None else None,
+    )
+
+
+@router.get("/{campaign_id}/runs", response_model=list[RunRead])
+def list_campaign_runs_endpoint(
+    campaign_id: uuid.UUID,
+    db: DBSession,
+    tenant: AuthenticatedTenant,
+) -> list[Run]:
+    return list_campaign_runs(db, tenant_id=tenant.id, campaign_id=campaign_id)
+
+
+@router.get("/{campaign_id}/findings", response_model=list[FindingRead])
+def list_campaign_findings_endpoint(
+    campaign_id: uuid.UUID,
+    db: DBSession,
+    tenant: AuthenticatedTenant,
+) -> list[Finding]:
+    return list_campaign_findings(db, tenant_id=tenant.id, campaign_id=campaign_id)
