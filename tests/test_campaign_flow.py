@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
@@ -7,7 +9,7 @@ from app.main import app
 
 
 def _headers() -> dict[str, str]:
-    return {settings.api_key_header: settings.hcvf_api_keys[0]}
+    return {settings.api_key_header: settings.api_keys[0]}
 
 
 def _create_campaign(client: TestClient, name: str) -> dict:
@@ -25,17 +27,19 @@ def _create_campaign(client: TestClient, name: str) -> dict:
 
 
 def test_campaign_creation_via_api() -> None:
+    name = f"campaign-flow-create-{uuid4()}"
     with TestClient(app) as client:
-        campaign = _create_campaign(client, "campaign-flow-create")
+        campaign = _create_campaign(client, name)
 
-    assert campaign["name"] == "campaign-flow-create"
+    assert campaign["name"] == name
     assert campaign["authorization_attested"] is True
     assert campaign["status"] == "draft"
 
 
 def test_campaign_listing_via_api() -> None:
+    name = f"campaign-flow-list-{uuid4()}"
     with TestClient(app) as client:
-        created = _create_campaign(client, "campaign-flow-list")
+        created = _create_campaign(client, name)
         response = client.get("/api/v1/campaigns", headers=_headers())
 
     assert response.status_code == 200, response.text
@@ -44,8 +48,9 @@ def test_campaign_listing_via_api() -> None:
 
 
 def test_campaign_cancellation_via_api() -> None:
+    name = f"campaign-flow-cancel-{uuid4()}"
     with TestClient(app) as client:
-        created = _create_campaign(client, "campaign-flow-cancel")
+        created = _create_campaign(client, name)
         response = client.post(
             f"/api/v1/campaigns/{created['id']}/cancel",
             headers=_headers(),
