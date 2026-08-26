@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import List
 
-from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,17 +15,14 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://localhost:6379/1"
     celery_result_backend: str = "redis://localhost:6379/2"
     api_key_header: str = "X-API-Key"
-    hcvf_api_keys: List[str] = Field(default_factory=lambda: ["dev-hcvf-key"])
+    hcvf_api_keys: str = "dev-hcvf-key"
     rate_limit_requests: int = 120
     rate_limit_window_seconds: int = 60
     scheduler_interval_seconds: int = 5
 
-    @field_validator("hcvf_api_keys", mode="before")
-    @classmethod
-    def parse_api_keys(cls, value: object) -> object:
-        if isinstance(value, str):
-            return [item.strip() for item in value.split(",") if item.strip()]
-        return value
+    @property
+    def api_keys(self) -> list[str]:
+        return [item.strip() for item in self.hcvf_api_keys.split(",") if item.strip()]
 
 
 @lru_cache
