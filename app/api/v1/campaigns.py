@@ -8,6 +8,7 @@ from pydantic import BaseModel, HttpUrl
 from sqlalchemy.orm import Session
 
 from app.core.errors import bad_request, not_found
+from app.core.metrics import CAMPAIGNS_CREATED
 from app.core.security import get_current_tenant
 from app.db.session import get_db
 from app.models import Campaign, Run, Tenant
@@ -81,8 +82,8 @@ def create_campaign(
 ) -> CampaignResponse:
     if not payload.authorization_attested:
         raise bad_request("authorization_attested must be true for an executable campaign")
-    service = CampaignService(db)
-    campaign = service.create_campaign(
+
+    campaign = CampaignService(db).create_campaign(
         tenant=tenant,
         name=payload.name.strip(),
         target_url=str(payload.target_url),
@@ -91,7 +92,17 @@ def create_campaign(
         actor=request.state.actor,
         request_id=request.state.request_id,
     )
+    CAMPAIGNS_CREATED.inc()
     return campaign_to_response(campaign)
+
+
+@router.get("", response_model=list[CampaignResponse])
+def list_campaigns(
+    tenant: Tenant = Depends(get_current_tenant),
+    db: Session = Depends(get_db),
+) -> list[CampaignResponse]:
+    campaigns = CampaignService(db).list_campaigns(tenant_id=tenant.id)
+    return [campaign_to_response(campaign) for campaign in campaigns]
 
 
 @router.get("/{campaign_id}", response_model=CampaignResponse)
@@ -103,6 +114,28 @@ def get_campaign(
     campaign = CampaignService(db).get_campaign(tenant_id=tenant.id, campaign_id=campaign_id)
     if campaign is None:
         raise not_found("Campaign")
+    return campaign_to_response(campaign)
+
+
+@router.post("/{campaign_id}/cancel", response_model=CampaignResponse)
+def cancel_campaign(
+    campaign_id: UUID,
+    request: Request,
+    tenant: Tenant = Depends(get_current_tenant),
+    db: Session = Depends(get_db),
+) -> CampaignResponse:
+    service = CampaignService(db)
+    campaign = service.get_campaign(tenant_id=tenant.id, campaign_id=campaign_id)
+    if campaign is None:
+        raise not_found("Campaign")
+    try:
+        campaign = service.cancel_campaign(
+            campaign=campaign,
+            actor=request.state.actor,
+            request_id=request.state.request_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return campaign_to_response(campaign)
 
 
