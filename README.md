@@ -67,6 +67,16 @@ chmod +x scripts/*.sh
 
 The scripts contain `#!/usr/bin/env bash` shebangs. If executable mode has not yet been set in a local checkout, each script can also be invoked explicitly with `bash scripts/<name>.sh`.
 
+## Runtime verification
+
+Before preflight or Docker startup, verify the local Python/runtime prerequisites without requiring containers to be running:
+
+```bash
+python3 scripts/verify_runtime.py
+```
+
+The verifier checks that `DATABASE_URL` uses psycopg 3, `REDIS_URL` and `API_KEY_HEADER` are present, required Python packages import successfully, and the Docker CLI is installed. Each check prints `PASS` or `FAIL` and the process exits nonzero if any required runtime prerequisite fails.
+
 ## Preflight
 
 Before starting Docker or applying migrations, run the static sanity check:
@@ -106,6 +116,7 @@ A failing preflight exits nonzero before any containers or database state are ch
 For a fresh clone, use this sequence:
 
 ```bash
+python3 scripts/verify_runtime.py
 bash scripts/preflight.sh
 ./scripts/diagnostics.sh
 ./scripts/bootstrap.sh
