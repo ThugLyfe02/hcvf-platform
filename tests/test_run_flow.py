@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 
@@ -8,7 +8,6 @@ from app.core.config import settings
 from app.db.session import SessionLocal
 from app.main import app
 from app.models import Campaign, Finding, Run, RunStatus
-from app.services.campaign_service import CampaignService
 
 
 def _headers() -> dict[str, str]:
@@ -29,7 +28,7 @@ def test_run_and_finding_flow() -> None:
             },
         )
         assert create_response.status_code == 201, create_response.text
-        campaign_id = create_response.json()["id"]
+        campaign_id = UUID(create_response.json()["id"])
 
         with SessionLocal() as db:
             campaign = db.get(Campaign, campaign_id)
