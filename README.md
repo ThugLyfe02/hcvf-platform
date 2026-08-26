@@ -67,15 +67,80 @@ chmod +x scripts/*.sh
 
 The scripts contain `#!/usr/bin/env bash` shebangs. If executable mode has not yet been set in a local checkout, each script can also be invoked explicitly with `bash scripts/<name>.sh`.
 
-## Validation
+## Preflight
 
-The repository includes four scripts intended to be run in this order by a developer validating a fresh clone:
+Before starting Docker or applying migrations, run the static sanity check:
 
 ```bash
-./scripts/bootstrap.sh
+bash scripts/preflight.sh
+```
+
+Preflight verifies:
+
+- required repository files exist
+- every Python file compiles successfully
+- no `psycopg2` references remain
+- psycopg 3 connection configuration is present
+- `docker-compose.yml` parses successfully through Docker Compose, or through PyYAML when Compose is unavailable
+
+Expected successful output resembles:
+
+```text
+HCVF preflight
+--------------
+[PASS] Required repository files are present
+[PASS] Python syntax check passed for all repository Python files
+[PASS] No psycopg2 references found
+[PASS] psycopg 3 connection configuration is present
+[PASS] Docker Compose configuration is valid
+
+Result
+------
+HCVF PREFLIGHT: PASSED
+```
+
+A failing preflight exits nonzero before any containers or database state are changed.
+
+## Validation
+
+For a fresh clone, use this sequence:
+
+```bash
+bash scripts/preflight.sh
 ./scripts/diagnostics.sh
+./scripts/bootstrap.sh
 ./scripts/test.sh
 ./scripts/smoke_test.sh
+```
+
+`diagnostics.sh` is intentionally safe to run before bootstrap. Containers that have not been created yet and a missing `.env` are reported as warnings, not fatal errors, because `bootstrap.sh` will create/start them. Docker, Docker Compose, Python 3.13, and required Python packages remain hard prerequisites.
+
+### `./scripts/diagnostics.sh`
+
+Checks the local prerequisites and reports each item independently:
+
+- Docker daemon availability
+- Docker Compose availability
+- Python 3.13
+- required Python imports
+- PostgreSQL container state
+- Redis container state
+- `.env` presence
+
+Expected output before the first bootstrap may resemble:
+
+```text
+HCVF diagnostics
+================
+[OK]   Docker daemon                running
+[OK]   Python version               3.13.x
+[OK]   Python packages              all required packages import successfully
+[OK]   Docker Compose               available
+[WARN] postgres container           not created yet; bootstrap will start it
+[WARN] redis container              not created yet; bootstrap will start it
+[WARN] .env file                    missing; bootstrap will create it from .env.example
+================
+HCVF diagnostics: PASSED WITH 3 WARNING(S)
 ```
 
 ### `./scripts/bootstrap.sh`
@@ -92,32 +157,6 @@ Applying Alembic migrations...
 HCVF bootstrap complete: PostgreSQL and Redis are healthy and migrations are at head.
 ```
 
-### `./scripts/diagnostics.sh`
-
-Checks the local prerequisites and reports each item independently:
-
-- Docker daemon availability
-- Python 3.13
-- required Python imports
-- PostgreSQL container state
-- Redis container state
-- `.env` presence
-
-Expected successful output resembles:
-
-```text
-HCVF diagnostics
-================
-[OK]   Docker daemon                running
-[OK]   Python version               3.13.x
-[OK]   Python packages              all required packages import successfully
-[OK]   postgres container           running (healthy)
-[OK]   redis container              running (healthy)
-[OK]   .env file                    present
-================
-HCVF diagnostics: ALL CHECKS PASSED
-```
-
 ### `./scripts/test.sh`
 
 Runs the complete pytest suite with verbose output and `-x`, so execution stops immediately at the first failing test. It exits nonzero on failure and prints an explicit summary.
@@ -132,7 +171,7 @@ HCVF TESTS: PASSED
 
 Starts `uvicorn app.main:app` in the background, waits for the API to answer, validates the `/health` JSON contract, and verifies that `/metrics` returns Prometheus exposition text. The API process is always terminated when the script exits.
 
-A degraded health response is accepted as a valid API response for smoke-test purposes because it proves the API is reachable and dependency state is being reported correctly. After `bootstrap.sh`, normal local output should be healthy.
+The health endpoint intentionally returns HTTP 200 for both healthy and degraded dependency state. Operational readiness is represented by the payload's `status` field, so smoke testing can distinguish "API is reachable but a dependency is down" from "API did not start".
 
 Expected successful output resembles:
 
@@ -154,7 +193,7 @@ Start the complete stack:
 docker compose up --build
 ```
 
-The API applies `alembic upgrade head` before startup. PostgreSQL and Redis use named persistent volumes. API, worker, and scheduler use `restart: unless-stopped`. Every service has a health check.
+The API applies `alembic upgrade head` before startup. PostgreSQL and Redis use named persistent volumes. API, worker, and scheduler use `restart: unless-stopped`. Every service has a health check and explicit container name.
 
 ## Campaign API example
 
@@ -256,7 +295,7 @@ Dependency health is exposed at:
 GET /health
 ```
 
-The handler executes `SELECT 1` against PostgreSQL and `PING` against Redis. Each dependency check is protected by a circuit breaker. A fully healthy response returns HTTP 200 with `status: ok`. If either dependency is unavailable, HCVF returns HTTP 503 with `status: degraded` and dependency/circuit state.
+The handler executes `SELECT 1` against PostgreSQL and `PING` against Redis. Each dependency check is protected by a circuit breaker. The endpoint returns HTTP 200 whenever the API is able to answer. A fully healthy payload has `status: ok`; if either dependency is unavailable the payload has `status: degraded` and includes dependency/circuit state.
 
 ## Security headers
 
