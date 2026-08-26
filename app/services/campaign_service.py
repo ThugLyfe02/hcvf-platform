@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models import Campaign, CampaignStatus, Run, RunStatus, Tenant
 from app.services.audit_service import AuditService
 
@@ -165,6 +166,8 @@ class CampaignService:
         target_scheme = target.scheme.lower()
         target_host = target.hostname.lower()
         target_port = target.port
+        development = settings.environment.lower() == "development"
+        loopback_hosts = {"127.0.0.1", "localhost", "::1"}
 
         for authorized in authorized_targets:
             candidate = urlsplit(authorized)
@@ -174,6 +177,11 @@ class CampaignService:
                 continue
             if candidate.hostname.lower() != target_host:
                 continue
+
+            candidate_host = candidate.hostname.lower()
+            if development and candidate_host in loopback_hosts:
+                return True
+
             if candidate.port != target_port:
                 continue
             return True
