@@ -24,8 +24,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        middleware_stack = app.middleware_stack
-        current = middleware_stack
+        current = app.middleware_stack
         while current is not None:
             if isinstance(current, RateLimitMiddleware):
                 await current.close()
@@ -49,3 +48,11 @@ app.include_router(health_router)
 app.include_router(metrics_router)
 app.include_router(campaigns_router)
 app.include_router(tenants_router)
+
+
+@app.get("/", tags=["system"])
+def root() -> dict[str, str]:
+    return {
+        "service": "hcvf",
+        "status": "ok",
+    }
