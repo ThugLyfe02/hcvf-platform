@@ -10,7 +10,7 @@ from app.models import Tenant
 
 def provision_configured_tenants() -> None:
     with SessionLocal() as db:
-        for index, api_key in enumerate(settings.hcvf_api_keys, start=1):
+        for index, api_key in enumerate(settings.api_keys, start=1):
             api_key_hash = hash_api_key(api_key)
             tenant = db.scalar(select(Tenant).where(Tenant.api_key_hash == api_key_hash))
             if tenant is None:
