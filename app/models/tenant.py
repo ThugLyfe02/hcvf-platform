@@ -11,8 +11,25 @@ class Tenant(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "tenants"
 
     name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    api_key_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
-    authorized_targets: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    api_key_hash: Mapped[str] = mapped_column(
+        String(128),
+        unique=True,
+        index=True,
+        nullable=False,
+    )
+    authorized_targets: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+    )
 
-    campaigns = relationship("Campaign", back_populates="tenant", cascade="all, delete-orphan")
-    audit_logs = relationship("AuditLog", back_populates="tenant", cascade="all, delete-orphan")
+    campaigns = relationship(
+        "Campaign",
+        back_populates="tenant",
+        cascade="all, delete-orphan",
+    )
+    audit_logs = relationship(
+        "AuditLog",
+        back_populates="tenant",
+        cascade="all, delete-orphan",
+    )
