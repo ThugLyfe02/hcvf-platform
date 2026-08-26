@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import time
 from uuid import uuid4
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from redis import Redis
+from redis.asyncio import Redis
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 
@@ -37,13 +38,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.url.path in {"/health", "/metrics"}:
             return await call_next(request)
 
-        identity = request.headers.get(settings.api_key_header) or (request.client.host if request.client else "unknown")
+        identity_source = request.headers.get(settings.api_key_header) or (
+            request.client.host if request.client else "unknown"
+        )
+        identity = hashlib.sha256(identity_source.encode("utf-8")).hexdigest()[:24]
         bucket = int(time.time()) // settings.rate_limit_window_seconds
         key = f"hcvf:rate:{identity}:{bucket}"
         try:
-            count = self.redis.incr(key)
+            count = await self.redis.incr(key)
             if count == 1:
-                self.redis.expire(key, settings.rate_limit_window_seconds + 1)
+                await self.redis.expire(key, settings.rate_limit_window_seconds + 1)
         except Exception:
             return JSONResponse(status_code=503, content={"detail": "Rate limiter unavailable"})
 
