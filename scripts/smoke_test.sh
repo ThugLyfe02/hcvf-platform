@@ -48,7 +48,7 @@ while true; do
   health_code="${response##*$'\n'}"
   health_body="${response%$'\n'*}"
 
-  if [[ "$health_code" == "200" || "$health_code" == "503" ]]; then
+  if [[ "$health_code" == "200" ]]; then
     break
   fi
 
@@ -68,7 +68,7 @@ if ! printf '%s' "$health_body" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"(o
   exit 1
 fi
 
-echo "Health endpoint: PASS (HTTP $health_code)"
+echo "Health endpoint: PASS (HTTP 200)"
 echo "Health payload: $health_body"
 
 metrics_headers="$(mktemp)"
