@@ -62,7 +62,10 @@ python3.13 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 cp .env.example .env
+chmod +x scripts/*.sh
 ```
+
+The scripts contain `#!/usr/bin/env bash` shebangs. If executable mode has not yet been set in a local checkout, each script can also be invoked explicitly with `bash scripts/<name>.sh`.
 
 ## Validation
 
