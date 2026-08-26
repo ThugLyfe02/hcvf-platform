@@ -1,5 +1,9 @@
-DATABASE_URL=postgresql+psycopg2://hcvf:password@localhost:5432/hcvf
-REDIS_URL=redis://localhost:6379/0
-API_KEY_HEADER=X-API-Key
-ENVIRONMENT=development
-LOG_LEVEL=INFO
+fastapi==0.115.0
+uvicorn[standard]==0.30.0
+sqlalchemy==2.0.35
+psycopg2-binary==2.9.9
+pydantic==2.9.2
+pydantic-settings==2.5.2
+celery==5.4.0
+redis==5.0.8
+alembic==1.13.3
