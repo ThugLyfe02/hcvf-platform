@@ -137,6 +137,24 @@ else
   fail "Cannot validate docker-compose.yml: Docker Compose or PyYAML is required"
 fi
 
+if [[ -n "$PYTHON_BIN" ]]; then
+  if "$PYTHON_BIN" scripts/check_alembic_graph.py >/dev/null 2>&1; then
+    pass "Alembic revision graph has exactly one head and no dangling parents"
+  else
+    "$PYTHON_BIN" scripts/check_alembic_graph.py >&2 || true
+    fail "Alembic revision graph is broken"
+  fi
+
+  if DATABASE_URL="sqlite:///./.preflight.db" RATE_LIMIT_ENABLED=false \
+    "$PYTHON_BIN" -c "import app.main, worker.scheduler, worker.tasks, worker.pipeline, app.db.init_db" >/dev/null 2>&1; then
+    pass "Application and worker modules import successfully"
+  else
+    DATABASE_URL="sqlite:///./.preflight.db" RATE_LIMIT_ENABLED=false \
+      "$PYTHON_BIN" -c "import app.main, worker.scheduler, worker.tasks, worker.pipeline, app.db.init_db" >&2 || true
+    fail "Import smoke test failed (missing dependency or broken import)"
+  fi
+fi
+
 section "Result"
 if [[ "$failures" -eq 0 ]]; then
   echo "HCVF PREFLIGHT: PASSED"

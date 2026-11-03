@@ -1,0 +1,51 @@
+[project]
+name = "hcvf-platform"
+version = "0.3.0"
+description = "HCVF - authorized, evidence-grade, agentic security validation"
+requires-python = ">=3.13"
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+extend-exclude = ["build", ".deps", ".wheels", "alembic/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "C4", "SIM", "RUF"]
+ignore = [
+    "E501",   # line length is handled by the formatter
+    "B008",   # FastAPI Depends() in defaults is idiomatic
+    "RUF012", # mutable class attributes are not used as dataclass fields here
+    "UP042",  # str+Enum is deliberate: it keeps str() semantics stable for SQLAlchemy
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "B011", "E402"]
+"scripts/**" = ["T201", "E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "worker", "tests"]
+
+[tool.mypy]
+python_version = "3.13"
+warn_unused_configs = true
+ignore_missing_imports = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+exclude = "^(build|alembic/versions)/"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "integration: requires PostgreSQL and Redis",
+]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.coverage.run]
+source = ["app", "worker"]
+branch = true
+omit = ["*/tests/*", "alembic/*"]
+
+[tool.coverage.report]
+fail_under = 60
+show_missing = true

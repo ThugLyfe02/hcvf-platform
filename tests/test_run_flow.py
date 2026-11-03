@@ -33,16 +33,26 @@ def test_run_and_finding_flow() -> None:
         with SessionLocal() as db:
             campaign = db.get(Campaign, campaign_id)
             assert campaign is not None
-            run = Run(campaign_id=campaign.id, status=RunStatus.completed, http_status=200)
+            run = Run(
+                campaign_id=campaign.id, tenant_id=campaign.tenant_id, status=RunStatus.completed, http_status=200
+            )
             db.add(run)
             db.flush()
             finding = Finding(
                 run_id=run.id,
+                tenant_id=campaign.tenant_id,
+                fingerprint="test-fingerprint-run-flow",
+                probe_id="test-probe",
                 kind="test_finding",
                 severity="info",
+                confidence=0.9,
+                status="open",
+                cwe="CWE-000",
                 title="Test finding",
                 detail="Deterministic run flow finding",
-                evidence={"source": "test"},
+                remediation="None required for a test fixture.",
+                evidence=[],
+                evidence_refs={"source": "test"},
             )
             db.add(finding)
             db.commit()

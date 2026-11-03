@@ -18,7 +18,32 @@ class Settings(BaseSettings):
     hcvf_api_keys: str = "dev-hcvf-key"
     rate_limit_requests: int = 120
     rate_limit_window_seconds: int = 60
+    rate_limit_enabled: bool = True
     scheduler_interval_seconds: int = 5
+
+    #: Agentic engine defaults.
+    hunt_budget_requests: int = 200
+    hunt_max_rps: float = 5.0
+    hunt_lease_seconds: int = 600
+    hunt_timeout_seconds: int = 300
+    evidence_dir: str = "evidence"
+    evidence_key: str = ""
+    #: Development only: permit the engine to reach private/loopback addresses.
+    allow_private_targets: bool = False
+
+    #: Autonomy. Off by default: a deployment opts in, and each tenant must still
+    #: hold an approved autonomy policy before the controller will act.
+    autonomy_enabled: bool = False
+    autonomy_interval_seconds: int = 60
+    autonomy_default_budget_requests: int = 120
+
+    #: Governance and hardening knobs.
+    max_request_bytes: int = 1_048_576
+    log_redaction: bool = True
+    idempotency_ttl_hours: int = 24
+    quota_enforced: bool = True
+    webhook_timeout_seconds: float = 5.0
+    rls_enforced: bool = False
 
     @property
     def api_keys(self) -> list[str]:

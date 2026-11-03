@@ -62,7 +62,9 @@ def check_python_packages() -> CheckResult:
             missing.append(package)
 
     passed = not missing
-    detail = "all required packages import successfully" if passed else f"missing or broken imports: {', '.join(missing)}"
+    detail = (
+        "all required packages import successfully" if passed else f"missing or broken imports: {', '.join(missing)}"
+    )
     return CheckResult("Required Python packages", passed, detail)
 
 

@@ -10,3 +10,9 @@ redis_data/
 *.log
 .coverage
 htmlcov/
+build/
+dist/
+evidence/
+.ruff_cache/
+.mypy_cache/
+.tmp/

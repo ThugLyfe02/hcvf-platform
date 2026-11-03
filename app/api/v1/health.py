@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Response, status
 from redis import Redis
 from sqlalchemy import text
 
@@ -20,12 +20,24 @@ def _check_postgres() -> None:
 
 
 def _check_redis() -> None:
-    client = Redis.from_url(settings.redis_url, decode_responses=True)
+    client = Redis.from_url(
+        settings.redis_url,
+        decode_responses=True,
+        socket_connect_timeout=1.0,
+        socket_timeout=1.0,
+    )
     try:
         if not client.ping():
             raise RuntimeError("Redis PING returned false")
     finally:
         client.close()
+
+
+@router.get("/healthz")
+def liveness() -> dict[str, str]:
+    """Liveness: the process is up. Never touches a dependency."""
+
+    return {"status": "ok"}
 
 
 @router.get("/health")
@@ -78,3 +90,13 @@ def health() -> dict[str, object]:
         "status": "ok" if healthy else "degraded",
         "dependencies": dependencies,
     }
+
+
+@router.get("/readyz")
+def readiness(response: Response) -> dict[str, object]:
+    """Readiness: dependencies are usable. Returns 503 when degraded."""
+
+    payload = health()
+    if payload.get("status") != "ok":
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return payload

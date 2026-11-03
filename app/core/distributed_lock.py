@@ -33,7 +33,7 @@ class DistributedLock:
             self.acquired = False
         return released
 
-    def __enter__(self) -> "DistributedLock":
+    def __enter__(self) -> DistributedLock:
         if not self.acquire():
             raise RuntimeError(f"Could not acquire distributed lock {self.key}")
         return self
