@@ -108,6 +108,7 @@ def outcome_from_row(row: dict) -> TaskOutcome | None:
         confirmed=payload.get("confirmed"),
         error=str(payload.get("error", "") or ""),
         notes=tuple(str(item) for item in payload.get("notes", [])),
+        route=str(payload.get("route", "") or ""),
     )
 
 
@@ -203,6 +204,17 @@ class Supervisor:
             counts[state.status.value] = counts.get(state.status.value, 0) + 1
         return counts
 
+    def add_tasks(self, tasks) -> tuple[TaskSpec, ...]:
+        """Adopt newly planned tasks (coverage expansion, diagnosis)."""
+
+        added: list[TaskSpec] = []
+        for task in tasks:
+            if task.key in self.states:
+                continue
+            self.states[task.key] = TaskState(spec=task)
+            added.append(task)
+        return tuple(added)
+
     # -- transitions -----------------------------------------------------
     def mark_running(self, key: str) -> TaskState:
         state = self.states[key]
@@ -230,7 +242,10 @@ class Supervisor:
                 return SupervisorEvent(outcome.task_key, state.status, retried=True, notes=tuple(notes))
             state.status = TaskStatus.blocked
             notes.append(f"blocked after {state.attempts} attempt(s)")
-            return SupervisorEvent(outcome.task_key, state.status, notes=tuple(notes))
+            added: list[TaskSpec] = []
+            if state.spec.kind in {TaskKind.recon, TaskKind.probe, TaskKind.verify}:
+                added = list(self._schedule_diagnosis(state))
+            return SupervisorEvent(outcome.task_key, state.status, added_tasks=tuple(added), notes=tuple(notes))
 
         if outcome.status is TaskStatus.skipped:
             state.status = TaskStatus.skipped
@@ -271,6 +286,51 @@ class Supervisor:
                 updated += 1
         return updated
 
+    # -- diagnosis -------------------------------------------------------
+    def _schedule_diagnosis(self, failed: TaskState) -> tuple[TaskSpec, ...]:
+        exists = any(
+            other.spec.kind is TaskKind.diagnose and other.spec.payload.get("failed_task") == failed.spec.key
+            for other in self.states.values()
+        )
+        if exists:
+            return ()
+        task = TaskSpec(
+            key=f"d{failed.spec.seq:02d}-diagnose",
+            seq=max(item.spec.seq for item in self.states.values()) + 1,
+            kind=TaskKind.diagnose,
+            title=f"Diagnose the failure of {failed.spec.title}",
+            worker="diagnose-worker",
+            route=failed.spec.route,
+            probe_id="",
+            depends_on=(failed.spec.key,),
+            budget_requests=3,
+            max_attempts=1,
+            safety=failed.spec.safety,
+            payload={
+                "failed_task": failed.spec.key,
+                "error": (failed.error or "")[:400],
+                "probe_id": failed.spec.probe_id,
+            },
+        )
+        self.states[task.key] = TaskState(spec=task)
+        return (task,)
+
+    def _diagnosis(self, failed: TaskState) -> TaskState | None:
+        for state in self.states.values():
+            if state.spec.kind is TaskKind.diagnose and state.spec.payload.get("failed_task") == failed.spec.key:
+                return state
+        return None
+
+    def _diagnosis_pending(self, failed: TaskState) -> bool:
+        diagnosis = self._diagnosis(failed)
+        return diagnosis is not None and diagnosis.status not in TERMINAL
+
+    def _diagnosis_notes(self, failed: TaskState) -> list[str]:
+        diagnosis = self._diagnosis(failed)
+        if diagnosis is None or diagnosis.outcome is None:
+            return []
+        return [f"{failed.spec.title}: {note}" for note in diagnosis.outcome.notes]
+
     # -- verdict ---------------------------------------------------------
     def verdict(self, criteria: tuple[Criterion, ...] | None = None) -> Verdict:
         actual = criteria or self.spec.criteria
@@ -279,11 +339,25 @@ class Supervisor:
         done_tasks = [state for state in self.states.values() if state.status is TaskStatus.done]
         pending = [state for state in self.states.values() if state.status not in TERMINAL]
 
+        under_diagnosis = [state for state in failed_tasks if self._diagnosis_pending(state)]
+        if under_diagnosis:
+            return Verdict(
+                ObjectiveStatus.running,
+                f"{len(under_diagnosis)} failure(s) under diagnosis",
+                unmet=tuple(unmet(results)),
+                completed_tasks=len(done_tasks),
+            )
+
         if failed_tasks:
+            diagnosis_notes = [note for state in failed_tasks for note in self._diagnosis_notes(state)]
+            reason = f"{len(failed_tasks)} task(s) blocked: " + "; ".join(
+                state.error or state.spec.title for state in failed_tasks
+            )
+            if diagnosis_notes:
+                reason += " | diagnosis: " + "; ".join(diagnosis_notes[:3])
             return Verdict(
                 ObjectiveStatus.blocked,
-                f"{len(failed_tasks)} task(s) blocked: "
-                + "; ".join(state.error or state.spec.title for state in failed_tasks),
+                reason,
                 unmet=tuple(unmet(results)),
                 completed_tasks=len(done_tasks),
                 failed_tasks=len(failed_tasks),

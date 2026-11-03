@@ -15,7 +15,8 @@ Design rules enforced here:
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -24,15 +25,26 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.engine.evidence import FileEvidenceStore, verification_key_from_env
+from app.engine.budget import Budget
+from app.engine.errors import EngineError
+from app.engine.evidence import (
+    FileEvidenceStore,
+    MerkleTree,
+    verification_key_from_env,
+    verify_manifest,
+    write_manifest,
+)
 from app.engine.executor import HuntExecutor
+from app.engine.http import GuardedHttpClient
 from app.engine.policy import EgressPolicy
+from app.engine.probes import registry
 from app.engine.target import build_grant, parse_target
 from app.engine.types import SafetyClass
 from app.engine.workforce.criteria import parse_criteria
 from app.engine.workforce.decompose import (
     TEMPLATE_CRITERIA,
     DecompositionError,
+    dynamic_coverage_tasks,
     plan_objective,
     slugify,
 )
@@ -404,8 +416,14 @@ class ObjectiveService:
 
         worker = workers_for(task.spec)
         request = worker.plan(task.spec)
-        observation = self._execute(objective, tenant_id=objective.tenant_id, request=request, task_key=task_row.key)
-        outcome = worker.judge(task.spec, observation)
+        observation = self._execute(
+            objective,
+            tenant_id=objective.tenant_id,
+            request=request,
+            task_key=task_row.key,
+            kind=task.spec.kind,
+        )
+        outcome = replace(worker.judge(task.spec, observation), route=task_row.route)
 
         task_row.error = outcome.error
         task_row.risk = observation.risk
@@ -468,13 +486,24 @@ class ObjectiveService:
                     {"routes": list(refreshed.routes[:8])},
                 )
 
+            # Discovery is a plan-changing event: grow the objective with the
+            # route-specific work the template implied but could not name.
+            self._expand_coverage(objective, supervisor, outcome.endpoints)
+
         self.db.commit()
         verdict = supervisor.verdict()
         if verdict.status is not ObjectiveStatus.running:
             return self._finalise(objective, supervisor)
         return StepResult(objective.id, task_row.key, task_row.status, verdict, objective.requests_used)
 
-    def _execute(self, objective: Objective, *, tenant_id: UUID, request, task_key: str) -> TaskObservation:
+    def _execute(
+        self, objective: Objective, *, tenant_id: UUID, request, task_key: str, kind: TaskKind
+    ) -> TaskObservation:
+        if kind is TaskKind.audit:
+            return self._audit_evidence(objective)
+        if kind is TaskKind.diagnose:
+            return self._diagnose(objective, request)
+
         target = parse_target(request.target_url)
         grant = build_grant(
             target,
@@ -496,6 +525,8 @@ class ObjectiveService:
             )
         except Exception as exc:
             return TaskObservation(error=f"{exc.__class__.__name__}: {exc}", requests=0)
+
+        write_manifest(store.root / "manifest.json", result.manifest)
 
         findings = tuple(
             FindingLite(
@@ -537,6 +568,183 @@ class ObjectiveService:
             error=error,
             confirmed=confirmed,
         )
+
+    def _audit_evidence(self, objective: Objective) -> TaskObservation:
+        """Re-verify every manifest this objective produced.
+
+        This is the difference between "we ran things" and "we can prove what we
+        ran". Any missing blob, altered leaf or bad signature fails the audit,
+        which blocks the objective instead of shipping a report.
+        """
+
+        key = verification_key_from_env()
+        verified = 0
+        empty = 0
+        problems: list[str] = []
+        for task in self.tasks(objective.id):
+            if task.status != TaskStatus.done.value:
+                continue
+            if task.kind not in {TaskKind.recon.value, TaskKind.probe.value, TaskKind.verify.value}:
+                continue
+            outcome = task.outcome or {}
+            if not outcome.get("probes_run"):
+                continue
+            manifest_path = self.evidence_root / str(objective.id) / task.key / "manifest.json"
+            if not manifest_path.exists():
+                problems.append(f"{task.key}: manifest missing")
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                problems.append(f"{task.key}: unreadable manifest ({exc})")
+                continue
+            if manifest.get("format") != "hcvf-evidence/v1":
+                problems.append(f"{task.key}: unknown evidence format")
+                continue
+            entries = manifest.get("entries", [])
+            if not entries:
+                # A probe can legitimately capture nothing (skipped, no body).
+                # There is no evidence to tamper with, but it is not proof either.
+                empty += 1
+                continue
+            signature = manifest.get("signature") or {}
+            signature_value = signature.get("value", "") if isinstance(signature, dict) else str(signature)
+            if not verify_manifest(manifest, signature_value, key):
+                problems.append(f"{task.key}: signature mismatch")
+                continue
+            if entries:
+                leaves = [bytes.fromhex(str(entry["digest"])) for entry in entries]
+                if MerkleTree(leaves).root != manifest.get("root"):
+                    problems.append(f"{task.key}: Merkle root does not match its leaves")
+                    continue
+                store = FileEvidenceStore(self.evidence_root / str(objective.id) / task.key)
+                missing = []
+                for entry in entries:
+                    try:
+                        store.get(str(entry["digest"]))
+                    except Exception:
+                        missing.append(str(entry["digest"])[:12])
+                if missing:
+                    problems.append(f"{task.key}: {len(missing)} blob(s) missing or corrupt")
+                    continue
+            verified += 1
+
+        if problems:
+            return TaskObservation(error="; ".join(problems[:5]))
+        return TaskObservation(
+            requests=0,
+            notes=(
+                f"{verified} evidence manifest(s) verified" + (f", {empty} with no captured evidence" if empty else ""),
+            ),
+        )
+
+    def _diagnose(self, objective: Objective, request) -> TaskObservation:
+        """One HEAD request, classified: why did the previous task fail?"""
+
+        target = parse_target(request.target_url)
+        grant = build_grant(
+            target,
+            safety=SafetyClass[objective.safety_ceiling],
+            approver=f"objective:{objective.key}:diagnose",
+            evidence_sha256=hashlib.sha256(f"{objective.id}|diagnose".encode()).hexdigest(),
+        )
+        budget = Budget(max_requests=1, max_bytes=64_000, max_seconds=15.0)
+        client = GuardedHttpClient(self.policy, grant, budget)
+        try:
+            response = client.head(request.target_url, safety=SafetyClass.read_only)
+        except EngineError as exc:
+            return TaskObservation(
+                requests=budget.used_requests,
+                notes=(f"transport failure ({exc.__class__.__name__}): {exc}"[:300],),
+            )
+        except Exception as exc:
+            return TaskObservation(
+                requests=budget.used_requests,
+                notes=(f"unexpected failure ({exc.__class__.__name__}): {exc}"[:300],),
+            )
+
+        status = response.status
+        if status in {401, 403}:
+            note = f"authentication wall (HTTP {status}); the probe needs credentials it does not have"
+        elif status == 404:
+            note = "route no longer resolves (HTTP 404); discovery may be stale"
+        elif status == 429:
+            note = "upstream throttled the request (HTTP 429); backoff is warranted"
+        elif status >= 500:
+            note = f"origin is failing (HTTP {status}); this is a target-side outage"
+        elif status >= 300:
+            note = f"route redirects (HTTP {status}); the probe followed the authorized hop"
+        else:
+            note = f"route is reachable (HTTP {status}); the earlier failure may be transient"
+        return TaskObservation(requests=budget.used_requests, notes=(note,))
+
+    def _expand_coverage(self, objective: Objective, supervisor: Supervisor, discovered: tuple[str, ...]) -> int:
+        """Grow the plan with route-specific work after discovery.
+
+        An objective is a hypothesis about where risk lives; recon is the
+        experiment that can move it. When the criterion asks for coverage, the
+        supervisor plans probes against the routes that were actually found.
+        """
+
+        wanted = objective.template == "coverage" or any(
+            str(item.get("kind")) == "min_route_coverage" for item in objective.criteria
+        )
+        if not wanted or not discovered:
+            return 0
+        existing = self.tasks(objective.id)
+        if any((task.payload or {}).get("dynamic") for task in existing):
+            return 0
+        known = {(task.route, task.probe_id) for task in existing}
+
+        ceiling = SafetyClass[objective.safety_ceiling]
+        allowed = tuple(probe_id for probe_id, probe_class in registry().items() if probe_class.spec.safety <= ceiling)
+        remaining_seq = max(task.seq for task in self.tasks(objective.id)) + 1
+        budget_left = max(0, objective.budget_requests - objective.requests_used)
+        max_tasks = min(12, budget_left // max(4, objective.per_task_budget))
+        if max_tasks < 1:
+            return 0
+        origin = parse_target(objective.target_url).origin
+        tasks = dynamic_coverage_tasks(
+            origin=origin,
+            discovered_routes=discovered,
+            allowed_probes=allowed,
+            start_seq=remaining_seq,
+            per_task_budget=objective.per_task_budget,
+            max_routes=6,
+            max_tasks=max_tasks,
+            recon_key="",
+        )
+        tasks = tuple(task for task in tasks if (task.route, task.probe_id) not in known)
+        added = supervisor.add_tasks(tasks)
+        for task in added:
+            self.db.add(
+                ObjectiveTask(
+                    objective_id=objective.id,
+                    tenant_id=objective.tenant_id,
+                    key=task.key,
+                    seq=task.seq,
+                    kind=task.kind.value,
+                    title=task.title,
+                    worker=task.worker,
+                    probe_id=task.probe_id,
+                    route=task.route,
+                    depends_on=list(task.depends_on),
+                    budget_requests=task.budget_requests,
+                    max_attempts=task.max_attempts,
+                    safety=task.safety.name,
+                    verify_kind=task.verify_kind,
+                    payload=dict(task.payload),
+                    status=TaskStatus.pending.value,
+                )
+            )
+        if added:
+            self._event(
+                objective,
+                "plan.expanded",
+                f"Coverage expansion added {len(added)} route-specific task(s) after discovery.",
+                {"routes": list(discovered[:10]), "tasks": [task.key for task in added]},
+            )
+        return len(added)
 
     def run_to_completion(self, objective: Objective, *, max_tasks: int = 25) -> Verdict:
         verdict = self._supervisor(objective).verdict()

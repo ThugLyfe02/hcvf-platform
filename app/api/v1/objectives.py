@@ -251,6 +251,32 @@ def objective_report(
     return service.report(objective)
 
 
+@router.get("/{objective_id}/coverage")
+def objective_coverage(
+    objective_id: UUID,
+    tenant: Tenant = Depends(require_scope("campaigns:read")),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """What the objective measured: discovered routes, probed routes, the gap."""
+
+    service = ObjectiveService(db)
+    objective = service.get(tenant_id=tenant.id, objective_id=objective_id)
+    if objective is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Objective not found")
+    supervisor = service._supervisor(objective)
+    evidence = supervisor.evidence()
+    return {
+        "coverage": evidence.coverage.to_dict(),
+        "routes": list((objective.plan or {}).get("spec", {}).get("target", "")),
+        "tasks": [
+            {"key": task.key, "kind": task.kind, "route": task.route, "status": task.status}
+            for task in service.tasks(objective.id)
+            if (task.payload or {}).get("coverage") or task.kind == "recon"
+        ],
+        "criteria": objective.criteria,
+    }
+
+
 # -- static catalogs --------------------------------------------------------
 catalog_router = APIRouter(prefix="/api/v1", tags=["objectives"])
 

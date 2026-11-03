@@ -218,11 +218,19 @@ class TestSupervisor(unittest.TestCase):
         supervisor.record(TaskOutcome(recon.spec.key, TaskStatus.failed, error="timeout"))
         self.assertEqual(recon.status, TaskStatus.pending)
         supervisor.mark_running(recon.spec.key)
-        supervisor.record(TaskOutcome(recon.spec.key, TaskStatus.failed, error="timeout"))
+        event = supervisor.record(TaskOutcome(recon.spec.key, TaskStatus.failed, error="timeout"))
         self.assertEqual(recon.status, TaskStatus.blocked)
+        # A bare failure is not final: the workforce explains it first.
+        self.assertEqual(len(event.added_tasks), 1)
+        self.assertEqual(event.added_tasks[0].kind, TaskKind.diagnose)
+        self.assertEqual(supervisor.verdict().status, ObjectiveStatus.running)
+
+        diagnosis = supervisor.get(event.added_tasks[0].key)
+        supervisor.mark_running(diagnosis.spec.key)
+        supervisor.record(TaskOutcome(diagnosis.spec.key, TaskStatus.done, notes=("host refused TCP connections",)))
         verdict = supervisor.verdict()
         self.assertEqual(verdict.status, ObjectiveStatus.blocked)
-        self.assertTrue(verdict.reason)
+        self.assertIn("refused TCP", verdict.reason)
 
     def test_critical_finding_queues_verification(self) -> None:
         supervisor = self._supervisor()

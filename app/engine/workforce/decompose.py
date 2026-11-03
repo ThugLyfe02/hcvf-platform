@@ -15,6 +15,7 @@ from dataclasses import replace
 
 from app.engine.probes import registry
 from app.engine.types import SafetyClass, stable_hash
+from app.engine.workforce.coverage import plan_coverage
 from app.engine.workforce.types import (
     Criterion,
     CriterionKind,
@@ -50,6 +51,7 @@ TEMPLATE_CRITERIA: dict[str, tuple[Criterion, ...]] = {
     "coverage": (
         Criterion(CriterionKind.min_probes, 4, label="at least four probes executed"),
         Criterion(CriterionKind.min_endpoints, 2, label="at least two endpoints discovered"),
+        Criterion(CriterionKind.min_route_coverage, 0.5, label="at least half of discovered routes probed"),
     ),
     "custom": (Criterion(CriterionKind.min_probes, 1, label="at least one probe executed"),),
 }
@@ -189,10 +191,57 @@ def plan_objective(spec: ObjectiveSpec, snapshot: SurfaceSnapshot) -> PlanResult
         )
 
     if spec.template == "coverage":
-        extra = _coverage_tasks(spec, snapshot, start_seq=len(tasks), probe_budget=probe_budget)
-        tasks.extend(extra)
-        if extra:
-            notes.append(f"coverage template added {len(extra)} route-specific tasks")
+        plan = plan_coverage(
+            origin=snapshot.origin,
+            routes=tuple(snapshot.routes),
+            endpoints=(),
+            allowed_probes=tuple(allowed),
+            max_routes=4,
+            max_tasks=max(4, spec.budget_requests // max(1, probe_budget) - 2),
+        )
+        start_seq = len(tasks)
+        for offset, (route, probe_id) in enumerate(plan.assignments):
+            probe_spec = _probe_spec(probe_id)
+            if probe_spec is None:
+                continue
+            seq = start_seq + offset
+            tasks.append(
+                TaskSpec(
+                    key=f"t{seq:02d}-cov-{slugify(probe_id)}-{slugify(route.rsplit('/', 1)[-1]) or 'entry'}",
+                    seq=seq,
+                    kind=TaskKind.probe,
+                    title=f"{probe_spec.name} at {route}",
+                    worker=WORKER_BY_PROBE.get(probe_id, "config-worker"),
+                    probe_id=probe_id,
+                    route=route,
+                    depends_on=(recon.key,),
+                    budget_requests=probe_budget,
+                    max_attempts=1,
+                    safety=probe_spec.safety,
+                    payload={"coverage": True},
+                )
+            )
+        if plan.assignments:
+            notes.append(
+                f"coverage plan assigned {len(plan.assignments)} route-specific task(s) across "
+                f"{len(plan.routes)} route(s)"
+            )
+        if plan.skipped_reasons:
+            notes.append("; ".join(plan.skipped_reasons))
+
+    audit = TaskSpec(
+        key=f"t{len(tasks):02d}-audit",
+        seq=len(tasks),
+        kind=TaskKind.audit,
+        title="Verify the integrity of every captured evidence manifest",
+        worker="auditor-worker",
+        route=snapshot.origin + "/",
+        depends_on=tuple(task.key for task in tasks if task.kind in {TaskKind.recon, TaskKind.probe}),
+        budget_requests=0,
+        max_attempts=1,
+        safety=SafetyClass.read_only,
+    )
+    tasks.append(audit)
 
     report = TaskSpec(
         key=f"t{len(tasks):02d}-report",
@@ -254,43 +303,6 @@ def _probes_from_criteria(criteria: tuple[Criterion, ...]) -> list[str]:
     return probes or ["security-headers"]
 
 
-def _coverage_tasks(
-    spec: ObjectiveSpec, snapshot: SurfaceSnapshot, *, start_seq: int, probe_budget: int
-) -> list[TaskSpec]:
-    """One task per (route, high-value probe), bounded by the budget."""
-
-    routes = list(snapshot.routes)[:4] or [snapshot.origin + "/"]
-    probes = list(TEMPLATE_PROBES["coverage"])
-    budget_left = max(0, spec.budget_requests - probe_budget * (len(probes) + 1) - 8)
-    tasks: list[TaskSpec] = []
-    seq = start_seq
-    for route in routes[1:]:  # the first route is covered by the base tasks
-        for probe_id in probes:
-            if budget_left < probe_budget:
-                return tasks
-            probe_spec = _probe_spec(probe_id)
-            if probe_spec is None or probe_spec.safety > spec.safety:
-                continue
-            seq += 1
-            tasks.append(
-                TaskSpec(
-                    key=f"t{seq:02d}-cov-{slugify(probe_id)}-{seq}",
-                    seq=seq,
-                    kind=TaskKind.probe,
-                    title=f"{probe_spec.name} at {route}",
-                    worker=WORKER_BY_PROBE.get(probe_id, "config-worker"),
-                    probe_id=probe_id,
-                    route=route,
-                    depends_on=(f"t00-recon-{slugify(spec.template)}",),
-                    budget_requests=probe_budget,
-                    max_attempts=1,
-                    safety=probe_spec.safety,
-                )
-            )
-            budget_left -= probe_budget
-    return tasks
-
-
 def retarget(tasks: tuple[TaskSpec, ...], snapshot: SurfaceSnapshot) -> tuple[TaskSpec, ...]:
     """Re-aim pending probe tasks at better routes discovered by recon."""
 
@@ -327,3 +339,52 @@ def verification_task(*, parent: TaskSpec, fingerprint: str, finding_kind: str, 
         verify_kind=finding_kind,
         payload={"fingerprint": fingerprint, "finding_kind": finding_kind},
     )
+
+
+def dynamic_coverage_tasks(
+    *,
+    origin: str,
+    discovered_routes: tuple[str, ...],
+    allowed_probes: tuple[str, ...],
+    start_seq: int,
+    per_task_budget: int,
+    max_routes: int = 6,
+    max_tasks: int = 12,
+    recon_key: str = "",
+) -> tuple[TaskSpec, ...]:
+    """Expand an objective after discovery: one probe per valuable route.
+
+    This is how the workforce finds an avenue mid-run: the plan is not frozen at
+    delegation time, it grows with the surface it has measured.
+    """
+
+    plan = plan_coverage(
+        origin=origin,
+        routes=discovered_routes,
+        allowed_probes=allowed_probes,
+        max_routes=max_routes,
+        max_tasks=max_tasks,
+    )
+    tasks: list[TaskSpec] = []
+    for offset, (route, probe_id) in enumerate(plan.assignments):
+        probe_spec = _probe_spec(probe_id)
+        if probe_spec is None:
+            continue
+        seq = start_seq + offset
+        tasks.append(
+            TaskSpec(
+                key=f"t{seq:02d}-dyn-{slugify(probe_id)}-{seq}",
+                seq=seq,
+                kind=TaskKind.probe,
+                title=f"{probe_spec.name} at {route}",
+                worker=WORKER_BY_PROBE.get(probe_id, "config-worker"),
+                probe_id=probe_id,
+                route=route,
+                depends_on=(recon_key,) if recon_key else (),
+                budget_requests=per_task_budget,
+                max_attempts=1,
+                safety=probe_spec.safety,
+                payload={"coverage": True, "dynamic": True},
+            )
+        )
+    return tuple(tasks)

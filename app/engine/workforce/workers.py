@@ -222,6 +222,52 @@ class ReportWorker(Worker):
         )
 
 
+class AuditorWorker(Worker):
+    """Checks that every prior task's evidence still verifies before signing off."""
+
+    name = "auditor-worker"
+    description = "Evidence integrity gate"
+    kinds = (TaskKind.audit,)
+
+    def plan(self, task: TaskSpec) -> ExecutionRequest:
+        return ExecutionRequest(target_url=task.route, probe_ids=(), budget_requests=0)
+
+    def judge(self, task: TaskSpec, observation: TaskObservation) -> TaskOutcome:
+        if observation.error:
+            return TaskOutcome(
+                task_key=task.key,
+                status=TaskStatus.failed,
+                error=f"evidence audit failed: {observation.error}",
+                notes=observation.notes,
+            )
+        return TaskOutcome(
+            task_key=task.key,
+            status=TaskStatus.done,
+            notes=observation.notes or ("evidence verified",),
+        )
+
+
+class DiagnoseWorker(Worker):
+    """Explains why a task failed instead of leaving a bare error string."""
+
+    name = "diagnose-worker"
+    description = "Failure classification for surgical escalation"
+    kinds = (TaskKind.diagnose,)
+
+    def plan(self, task: TaskSpec) -> ExecutionRequest:
+        return ExecutionRequest(target_url=task.route, probe_ids=(), budget_requests=max(1, task.budget_requests))
+
+    def judge(self, task: TaskSpec, observation: TaskObservation) -> TaskOutcome:
+        notes = observation.notes or ("no diagnosis available",)
+        return TaskOutcome(
+            task_key=task.key,
+            status=TaskStatus.done,
+            probes_run=observation.probes_run,
+            requests=observation.requests,
+            notes=notes,
+        )
+
+
 _REGISTRY: dict[str, Worker] = {
     worker.name: worker
     for worker in (
@@ -231,6 +277,8 @@ _REGISTRY: dict[str, Worker] = {
         ExposureWorker(),
         SurfaceWorker(),
         VerifierWorker(),
+        AuditorWorker(),
+        DiagnoseWorker(),
         ReportWorker(),
     )
 }

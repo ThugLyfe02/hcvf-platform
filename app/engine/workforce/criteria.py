@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from app.engine.workforce.coverage import CoverageState
 from app.engine.workforce.types import (
     Criterion,
     CriterionKind,
@@ -29,6 +30,7 @@ class EvidenceBundle:
     verified: set[str] = field(default_factory=set)
     refuted: set[str] = field(default_factory=set)
     requests_used: int = 0
+    coverage: CoverageState = field(default_factory=CoverageState)
 
     def add_findings(self, findings: tuple[FindingLite, ...]) -> None:
         for finding in findings:
@@ -38,6 +40,9 @@ class EvidenceBundle:
         self.add_findings(outcome.findings)
         self.probes_run.update(outcome.probes_run)
         self.endpoints.update(outcome.endpoints)
+        self.coverage.discover(outcome.endpoints)
+        if getattr(outcome, "route", ""):
+            self.coverage.record(outcome.route, outcome.probes_run)
         self.requests_used += outcome.requests
         self.risk = max(self.risk, outcome.risk)
         if outcome.confirmed is True:
@@ -60,6 +65,7 @@ class EvidenceBundle:
             "verified": len(self.verified),
             "refuted": len(self.refuted),
             "requests_used": self.requests_used,
+            "coverage": self.coverage.to_dict(),
         }
 
 
@@ -86,6 +92,10 @@ def parse_criteria(payload: list[dict] | None, *, template_criteria: tuple[Crite
             value = int(value)
             if value < 1:
                 raise CriterionError(f"{raw_kind} must be at least 1")
+        elif kind is CriterionKind.min_route_coverage:
+            value = float(value)
+            if not 0.0 <= value <= 1.0:
+                raise CriterionError("min_route_coverage must be between 0 and 1")
         elif kind in {CriterionKind.risk_below, CriterionKind.risk_above}:
             value = float(value)
             if not 0.0 <= value <= 100.0:
@@ -107,6 +117,7 @@ def parse_criteria(payload: list[dict] | None, *, template_criteria: tuple[Crite
                     CriterionKind.min_verified,
                     CriterionKind.risk_below,
                     CriterionKind.risk_above,
+                    CriterionKind.min_route_coverage,
                 }
                 else "",
                 label=str(item.get("label", "")).strip(),
@@ -154,6 +165,15 @@ def evaluate(criteria: tuple[Criterion, ...], evidence: EvidenceBundle) -> list[
         elif criterion.kind is CriterionKind.risk_above:
             results.append(
                 CriterionResult(criterion, evidence.risk > float(criterion.value), f"risk {evidence.risk:.1f}")
+            )
+        elif criterion.kind is CriterionKind.min_route_coverage:
+            ratio = evidence.coverage.ratio()
+            results.append(
+                CriterionResult(
+                    criterion,
+                    ratio >= float(criterion.value),
+                    f"coverage {ratio:.0%} of {len(evidence.coverage.discovered)} discovered route(s)",
+                )
             )
         elif criterion.kind is CriterionKind.min_verified:
             count = len(evidence.verified)

@@ -42,6 +42,8 @@ class TaskKind(StrEnum):
     recon = "recon"
     probe = "probe"
     verify = "verify"
+    audit = "audit"
+    diagnose = "diagnose"
     report = "report"
 
 
@@ -53,6 +55,7 @@ class CriterionKind(StrEnum):
     risk_below = "risk_below"
     risk_above = "risk_above"
     min_verified = "min_verified"
+    min_route_coverage = "min_route_coverage"
 
 
 TEMPLATES = ("posture", "auth", "exposure", "coverage", "custom")
@@ -89,6 +92,7 @@ class CriterionResult:
     def to_dict(self) -> dict[str, object]:
         return {
             "kind": self.criterion.kind.value,
+            "value": self.criterion.value,
             "key": self.criterion.key,
             "required": self.criterion.required,
             "satisfied": self.satisfied,
@@ -171,6 +175,8 @@ class TaskOutcome:
     confirmed: bool | None = None
     error: str = ""
     notes: tuple[str, ...] = ()
+    #: Route this outcome was produced against, for coverage accounting.
+    route: str = ""
 
     @property
     def ok(self) -> bool:
@@ -188,6 +194,7 @@ class TaskOutcome:
             "confirmed": self.confirmed,
             "error": self.error,
             "notes": list(self.notes),
+            "route": self.route,
         }
 
 

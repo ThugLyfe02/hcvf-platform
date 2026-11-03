@@ -56,6 +56,7 @@ watch a single task, in isolation, and then reproduce it.
 | `min_endpoints` | at least N endpoints were discovered |
 | `risk_below` / `risk_above` | the composite risk score is on that side |
 | `min_verified` | at least N findings were independently reproduced |
+| `min_route_coverage` | at least that fraction of discovered routes was probed |
 
 Templates ship defaults that only assert the work happened (`min_probes`,
 `min_endpoints`). Outcome criteria are yours to add — and if they are not met,
@@ -82,6 +83,35 @@ and, for serious findings, the verifier's.
 
 ---
 
+## 3a. Coverage planning: the plan grows with the surface
+
+A route is not a uniform thing: `/login`, `/admin`, `/api/v1/orders` and
+`/export/csv` deserve different probes. The coverage planner classifies each
+discovered route by role (entry, auth, admin, api, data, other), assigns the
+probes that matter for that role, and spends from the budget breadth-first:
+one high-value probe on many routes beats five probes on one route.
+
+Planning happens **after** recon, not only at delegation time. When the
+template or the criteria ask for coverage, the supervisor expands the DAG
+with route-specific tasks (`plan.expanded` event) and re-aims pending tasks
+at the discovered routes. `GET /objectives/{id}/coverage` reports the
+measured ratio, the probed route set and the remaining gap.
+
+## 3b. Evidence audit: proof of work
+
+Before the report task, `auditor-worker` re-verifies every manifest the
+objective produced: format, HMAC signature, recomputed Merkle root from its
+leaves, and the presence of every blob. One altered leaf blocks the
+objective with the offending task named. An empty manifest (a probe that
+captured nothing) is counted separately, not treated as proof.
+
+## 3c. Diagnosis before blocking
+
+A task that fails its last attempt is not final. `diagnose-worker` runs one
+HEAD and classifies the failure ? transport, authentication wall, stale
+route, throttling, origin outage ? and the blocked verdict carries that
+explanation. Failures become knowledge instead of error strings.
+
 ## 4. How completion is decided
 
 ```
@@ -99,6 +129,9 @@ recon ──► probe ──► probe ──► … ──► report
 If 1–4 hold, the supervisor writes `completed` and the report. Otherwise the
 objective is `blocked` with the exact unmet criteria, or `running` if work
 remains. A blocked task is retried up to `max_attempts` before it counts.
+
+The audit task is part of every plan and runs after all probes; a failed
+audit is a blocked objective, never a completed one.
 
 Verification tasks are injected automatically for findings with severity `high`
 or `critical` and confidence ≥ 0.60. They re-run **the same probe against the
@@ -156,6 +189,13 @@ it and writes an `escalate` decision with the cooldown.
   budget, attempts and an outcome; every state change is an event.
 - **A scan cannot be resumed.** Objectives are durable; work continues after a
   restart at the next ready task.
+
+## 7a. Narrow retry (autonomy)
+
+When an objective blocks, the controller records the exact criteria that
+failed. After `escalation_cooldown_minutes`, if `narrow_on_retry` is enabled,
+the next delegation for that target asks **only for those criteria** ? not
+for the whole doctrine. The previous criterion that passed is not re-requested.
 
 ## 8. Notifications
 
