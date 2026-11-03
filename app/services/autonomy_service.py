@@ -149,6 +149,10 @@ class AutonomyService:
         max_objectives_per_day: int = 4,
         objective_budget_requests: int = 120,
         escalation_cooldown_minutes: int = 180,
+        template_auto: bool = True,
+        narrow_on_retry: bool = True,
+        max_active_objectives: int = 2,
+        daily_objective_requests: int = 400,
         approved_by: str,
         approval_statement: str,
         actor: str,
@@ -178,6 +182,10 @@ class AutonomyService:
             raise AutonomyError("objective_budget_requests must be between 20 and 5000")
         if not 15 <= escalation_cooldown_minutes <= 10080:
             raise AutonomyError("escalation_cooldown_minutes must be between 15 and 10080")
+        if not 1 <= max_active_objectives <= 16:
+            raise AutonomyError("max_active_objectives must be between 1 and 16")
+        if not 20 <= daily_objective_requests <= 100000:
+            raise AutonomyError("daily_objective_requests must be between 20 and 100000")
         for value in (quiet_hours_start, quiet_hours_end):
             if value is not None and not 0 <= value <= QUIET_HOURS_MAX:
                 raise AutonomyError("quiet hours must be hours 0-23")
@@ -213,6 +221,10 @@ class AutonomyService:
         policy.max_objectives_per_day = max_objectives_per_day
         policy.objective_budget_requests = objective_budget_requests
         policy.escalation_cooldown_minutes = escalation_cooldown_minutes
+        policy.template_auto = template_auto
+        policy.narrow_on_retry = narrow_on_retry
+        policy.max_active_objectives = max_active_objectives
+        policy.daily_objective_requests = daily_objective_requests
 
         if approval_statement.strip():
             approved_at = datetime.now(UTC)
@@ -665,6 +677,24 @@ class AutonomyService:
             return TickReport(policy.tenant_id, "skip", "no enabled hunt targets")
 
         active_targets = self._active_objective_targets(policy.tenant_id)
+        if len(active_targets) >= max(1, policy.max_active_objectives):
+            reason = (
+                f"fleet is full ({len(active_targets)}/{policy.max_active_objectives} active objective(s)); "
+                "waiting for one to finish before delegating more"
+            )
+            if not self._recent_decision(policy.tenant_id, "skip", reason):
+                self._record(policy.tenant_id, Decision("skip", "", reason, 0.0), now=now)
+                self.db.commit()
+            return TickReport(policy.tenant_id, "skip", reason)
+
+        requests_today = self.daily_objective_requests_used(policy.tenant_id, now, policy.timezone)
+        if requests_today >= policy.daily_objective_requests:
+            reason = f"daily objective request budget spent ({requests_today}/{policy.daily_objective_requests})"
+            if not self._recent_decision(policy.tenant_id, "skip", reason):
+                self._record(policy.tenant_id, Decision("skip", "", reason, 0.0), now=now)
+                self.db.commit()
+            return TickReport(policy.tenant_id, "skip", reason)
+
         candidates: list[tuple[float, HuntTarget]] = []
         for target in targets:
             if target.consecutive_failures >= policy.max_consecutive_failures:
@@ -689,32 +719,50 @@ class AutonomyService:
         if tenant is None:
             return TickReport(policy.tenant_id, "skip", "tenant missing")
 
-        template = policy.objective_template
-        if template == "custom":
-            template = self._choose_template(policy, target)
-        cooldown_key = f"objective escalation cooldown ({template})"
-        if self._recent_decision(
-            policy.tenant_id, "escalate", cooldown_key, within_minutes=policy.escalation_cooldown_minutes
-        ):
-            reason = f"{template} objective for {target.url} is cooling down after an earlier block"
-            return TickReport(policy.tenant_id, "skip", reason, target.url, utility=score)
+        narrow = self._narrow_retry(policy, target, now) if policy.narrow_on_retry else None
+        if narrow is not None:
+            template, criteria_payload, retry_of = narrow
+            action = "delegate-narrow"
+        else:
+            criteria_payload, retry_of = None, ""
+            template = policy.objective_template
+            if policy.template_auto or template in {"custom", "auto"}:
+                template = self._choose_template(policy, target)
+            cooldown_key = f"objective escalation cooldown ({template})"
+            if self._recent_decision(
+                policy.tenant_id, "escalate", cooldown_key, within_minutes=policy.escalation_cooldown_minutes
+            ):
+                reason = f"{template} objective for {target.url} is cooling down after an earlier block"
+                return TickReport(policy.tenant_id, "skip", reason, target.url, utility=score)
+            action = "delegate"
+
+        alternatives = [
+            {"target": candidate.url, "utility": round(utility, 4)} for utility, candidate in candidates[1:3]
+        ][:2]
 
         from app.services.objective_service import ObjectiveError, ObjectiveService
 
         try:
             objective = ObjectiveService(self.db).create(
                 tenant=tenant,
-                title=f"{template} objective for {_origin(target.url)}",
+                title=(
+                    f"{template} retry for {_origin(target.url)}"
+                    if narrow is not None
+                    else f"{template} objective for {_origin(target.url)}"
+                ),
                 target_url=target.url,
                 template=template,
                 budget_requests=policy.objective_budget_requests,
                 per_task_budget=max(8, policy.objective_budget_requests // 8),
-                criteria_payload=None,
+                criteria_payload=criteria_payload,
                 safety_ceiling=policy.safety_ceiling,
                 priority=max(1, min(10, 10 - int(score * 5))),
                 deadline_minutes=240,
                 description=(
-                    "Delegated by the autonomy controller. Complete only when every acceptance criterion is verified."
+                    "Narrow retry: the previous objective blocked on these criteria and only these are requested now."
+                    if narrow is not None
+                    else "Delegated by the autonomy controller. Complete only when every acceptance criterion "
+                    "is verified."
                 ),
                 actor=f"autonomy:{policy.id}",
                 origin="autonomy",
@@ -730,13 +778,31 @@ class AutonomyService:
         target.next_eligible_at = now + timedelta(minutes=policy.min_interval_minutes)
         policy.last_tick_at = now
 
+        history = dict(policy.template_history or {})
+        rotation = list(history.get(_origin(target.url), []))
+        rotation.append(template)
+        history[_origin(target.url)] = rotation[-5:]
+        policy.template_history = history
+
         decision = Decision(
-            "delegate",
+            action,
             target.url,
-            f"delegated {template} objective {objective.key} (utility {score:.3f}, {objective.budget_requests} requests)",
+            (
+                f"delegated narrow retry {objective.key} of {retry_of} ({len(criteria_payload or [])} criterion/criteria)"
+                if narrow is not None
+                else f"delegated {template} objective {objective.key} "
+                f"(utility {score:.3f}, {objective.budget_requests} requests)"
+            ),
             score,
             None,
-            {"objective_id": str(objective.id), "template": template, "criteria": objective.criteria},
+            {
+                "objective_id": str(objective.id),
+                "template": template,
+                "criteria": objective.criteria,
+                "narrow_retry": narrow is not None,
+                "retry_of": retry_of,
+                "alternatives_considered": alternatives,
+            },
         )
         self._record(policy.tenant_id, decision, now=now)
         self.db.commit()
@@ -751,7 +817,7 @@ class AutonomyService:
         )
         return TickReport(
             policy.tenant_id,
-            "delegate",
+            action,
             decision.reason,
             target.url,
             None,
@@ -790,6 +856,72 @@ class AutonomyService:
         )
         return {_origin(url) for url in rows}
 
+    def daily_objective_requests_used(self, tenant_id: UUID, now: datetime, tz_name: str) -> int:
+        from app.models import Objective
+
+        zone = _zone(tz_name)
+        local_now = now.astimezone(zone)
+        since = local_now.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(UTC)
+        total = self.db.scalar(
+            select(func.coalesce(func.sum(Objective.budget_requests), 0)).where(
+                Objective.tenant_id == tenant_id,
+                Objective.origin == "autonomy",
+                Objective.created_at >= since,
+            )
+        )
+        return int(total or 0)
+
+    def _narrow_retry(
+        self, policy: AutonomyPolicy, target: HuntTarget, now: datetime
+    ) -> tuple[str, list[dict], str] | None:
+        """Return the criteria that blocked the last objective, once cooldown elapsed.
+
+        This is the escalation ladder: instead of re-running an entire doctrine
+        and hoping the missing observation appears, ask only for the observation
+        that was missing.
+        """
+
+        origin = _origin(target.url)
+        row = self.db.scalar(
+            select(AutonomyDecision)
+            .where(
+                AutonomyDecision.tenant_id == policy.tenant_id,
+                AutonomyDecision.action == "escalate",
+                AutonomyDecision.target_url == origin,
+            )
+            .order_by(AutonomyDecision.at.desc())
+            .limit(1)
+        )
+        if row is None:
+            return None
+        detail = dict(row.detail or {})
+        criteria = list(detail.get("failed_criteria") or [])
+        if not criteria:
+            return None
+        blocked_at = _aware(row.at)
+        if blocked_at is None or blocked_at > now - timedelta(minutes=policy.escalation_cooldown_minutes):
+            return None
+        retry_of = str(detail.get("objective_id", ""))
+        already = self.db.scalar(
+            select(AutonomyDecision.id).where(
+                AutonomyDecision.tenant_id == policy.tenant_id,
+                AutonomyDecision.action == "delegate-narrow",
+                AutonomyDecision.target_url == origin,
+            )
+        )
+        if already is not None and retry_of:
+            for prior in self.db.scalars(
+                select(AutonomyDecision).where(
+                    AutonomyDecision.tenant_id == policy.tenant_id,
+                    AutonomyDecision.action == "delegate-narrow",
+                    AutonomyDecision.target_url == origin,
+                )
+            ):
+                if str((prior.detail or {}).get("retry_of", "")) == retry_of:
+                    return None
+        template = str(detail.get("template") or policy.objective_template or "posture")
+        return template, criteria, retry_of
+
     def _choose_template(self, policy: AutonomyPolicy, target: HuntTarget) -> str:
         """Pick the doctrine with the largest unproven surface for this host.
 
@@ -804,16 +936,21 @@ class AutonomyService:
 
         host = urlsplit(target.url).hostname or ""
         tried = {stat.probe_id for stat in self.db.scalars(select(ProbeStat).where(ProbeStat.target_host == host))}
-        best_template = "posture"
-        best_gap = -1
+        recent = set((policy.template_history or {}).get(_origin(target.url), [])[-1:])
+        scored: list[tuple[int, int, str]] = []
         for template, probes in TEMPLATE_PROBES.items():
             if template == "coverage":
                 continue
             gap = len([probe for probe in probes if probe not in tried])
-            if gap > best_gap:
-                best_gap = gap
-                best_template = template
-        return best_template
+            # Prefer the largest unproven surface; rotate away from the template
+            # used last so a single doctrine cannot monopolise a target.
+            scored.append((-gap, 1 if template in recent else 0, template))
+        scored.sort()
+        if not scored:
+            return "posture"
+        best_gap = -scored[0][0]
+        fresh = [item for item in scored if -item[0] == best_gap and item[1] == 0]
+        return (fresh or [scored[0]])[0][2]
 
     def record_objective_outcome(self, objective) -> None:
         """Fold an objective's verdict back into scheduling state and decisions."""
@@ -833,6 +970,20 @@ class AutonomyService:
         completed = objective.status == "completed"
         findings = int((objective.result or {}).get("evidence", {}).get("findings", 0) or 0)
 
+        report = objective.result or {}
+        failed_criteria: list[dict] = []
+        for item in report.get("criteria", []) or []:
+            if not item.get("satisfied", False) and item.get("required", True):
+                failed_criteria.append(
+                    {
+                        "kind": item.get("kind"),
+                        "value": item.get("value"),
+                        "key": item.get("key", ""),
+                        "label": item.get("description", ""),
+                        "required": True,
+                    }
+                )
+
         target.last_status = objective.status
         target.last_findings = findings
         if completed:
@@ -846,14 +997,16 @@ class AutonomyService:
                 objective.tenant_id,
                 Decision(
                     "escalate",
-                    objective.target_url,
+                    _origin(objective.target_url),
                     f"objective escalation cooldown ({objective.template})",
                     0.0,
                     detail={
                         "objective_id": str(objective.id),
+                        "template": objective.template,
                         "status": objective.status,
                         "verdict": objective.verdict[:400],
                         "cooldown_minutes": cooldown,
+                        "failed_criteria": failed_criteria,
                     },
                 ),
                 now=now,

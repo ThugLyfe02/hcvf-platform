@@ -49,6 +49,13 @@ class AutonomyPolicy(TimestampMixin, UUIDPrimaryKeyMixin, Base):
     max_objectives_per_day: Mapped[int] = mapped_column(Integer, nullable=False, default=4)
     objective_budget_requests: Mapped[int] = mapped_column(Integer, nullable=False, default=120)
     escalation_cooldown_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=180)
+    #: Always pick the doctrine by gap analysis + rotation, ignoring a fixed template.
+    template_auto: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    #: After a block, retry only the criteria that failed instead of the whole doctrine.
+    narrow_on_retry: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    max_active_objectives: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
+    daily_objective_requests: Mapped[int] = mapped_column(Integer, nullable=False, default=400)
+    template_history: Mapped[dict] = mapped_column(JSONDoc, nullable=False, default=dict)
     #: Minimum scheduling utility required to launch an autonomous hunt.
     min_utility: Mapped[float] = mapped_column(Float, nullable=False, default=0.08)
     last_tick_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

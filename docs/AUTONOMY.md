@@ -55,7 +55,30 @@ The controller now has a `mode`:
   decomposes it, verifies serious findings and only finishes when acceptance
   criteria pass. See [`OBJECTIVES.md`](OBJECTIVES.md).
 
-Objective mode adds four rules: `max_objectives_per_day`, `objective_budget_requests`, `objective_template` (or gap analysis when set to `custom`), and `escalation_cooldown_minutes`. A target with an active objective is not delegated again, and a blocked objective puts that template on cooldown for the target instead of retrying it every tick.
+Objective mode adds ten rules:
+
+| Rule | Effect |
+|---|---|
+| `max_objectives_per_day` | daily delegation cap |
+| `objective_budget_requests` | budget per delegated objective |
+| `objective_template` | fixed doctrine, or `custom`/auto for gap analysis |
+| `template_auto` | always choose by gap analysis + rotation |
+| `escalation_cooldown_minutes` | how long a blocked template rests |
+| `narrow_on_retry` | retry only the criteria that failed |
+| `max_active_objectives` | fleet cap across the tenant |
+| `daily_objective_requests` | total request budget delegated per day |
+| `template_history` | last templates per target, for rotation |
+| per-target interval | no target is delegated twice in a row |
+
+Selection is deliberately conservative: a target with an active objective is
+skipped, a full fleet blocks delegation entirely, and a target whose
+`next_eligible_at` has not arrived is skipped rather than re-delegated.
+
+After a block the controller records the failed criteria in the escalation
+decision. Once the cooldown passes, `narrow_on_retry` delegates a **narrow
+retry** whose criteria are exactly the ones that failed ? the parts that
+passed are not re-run. Every decision stores the alternatives it considered,
+so the choice is auditable rather than implied.
 
 ## 2. What it actually schedules
 

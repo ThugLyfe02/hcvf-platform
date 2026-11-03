@@ -25,6 +25,10 @@ class AutonomyPolicyUpsert(BaseModel):
     max_objectives_per_day: int = Field(default=4, ge=1, le=96)
     objective_budget_requests: int = Field(default=120, ge=20, le=5000)
     escalation_cooldown_minutes: int = Field(default=180, ge=15, le=10080)
+    template_auto: bool = True
+    narrow_on_retry: bool = True
+    max_active_objectives: int = Field(default=2, ge=1, le=16)
+    daily_objective_requests: int = Field(default=400, ge=20, le=100000)
     safety_ceiling: Literal["read_only", "state_changing"] = "read_only"
     budget_requests_per_run: int = Field(default=120, ge=1, le=1000)
     max_runs_per_day: int = Field(default=8, ge=1, le=96)
@@ -57,6 +61,10 @@ class AutonomyPolicyResponse(BaseModel):
     max_objectives_per_day: int
     objective_budget_requests: int
     escalation_cooldown_minutes: int
+    template_auto: bool
+    narrow_on_retry: bool
+    max_active_objectives: int
+    daily_objective_requests: int
     approved_by: str
     approval_statement: str
     approval_sha256: str
@@ -117,6 +125,10 @@ def _policy_response(policy: AutonomyPolicy) -> AutonomyPolicyResponse:
         max_objectives_per_day=policy.max_objectives_per_day,
         objective_budget_requests=policy.objective_budget_requests,
         escalation_cooldown_minutes=policy.escalation_cooldown_minutes,
+        template_auto=policy.template_auto,
+        narrow_on_retry=policy.narrow_on_retry,
+        max_active_objectives=policy.max_active_objectives,
+        daily_objective_requests=policy.daily_objective_requests,
         approved_by=policy.approved_by,
         approval_statement=policy.approval_statement,
         approval_sha256=policy.approval_sha256,
@@ -216,6 +228,10 @@ def upsert_autonomy(
             max_objectives_per_day=payload.max_objectives_per_day,
             objective_budget_requests=payload.objective_budget_requests,
             escalation_cooldown_minutes=payload.escalation_cooldown_minutes,
+            template_auto=payload.template_auto,
+            narrow_on_retry=payload.narrow_on_retry,
+            max_active_objectives=payload.max_active_objectives,
+            daily_objective_requests=payload.daily_objective_requests,
             approved_by=payload.approved_by,
             approval_statement=payload.approval_statement,
             actor=request.state.actor,

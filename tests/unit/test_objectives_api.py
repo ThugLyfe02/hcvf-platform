@@ -8,6 +8,7 @@ import json
 import os
 import threading
 import unittest
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from uuid import UUID
@@ -26,7 +27,7 @@ from sqlalchemy import select, update
 
 from app.core.config import settings
 from app.db.session import SessionLocal, engine
-from app.models import Base, HuntTarget, Objective, ObjectiveTask, Tenant
+from app.models import AutonomyDecision, Base, HuntTarget, Objective, ObjectiveTask, Tenant
 from app.services import webhooks
 from app.services.autonomy_service import AutonomyService
 from app.services.objective_service import ObjectiveService
@@ -96,6 +97,8 @@ class ObjectiveApiTests(unittest.TestCase):
                 db.delete(task)
             for objective in db.scalars(select(Objective)):
                 db.delete(objective)
+            for decision in db.scalars(select(AutonomyDecision)):
+                db.delete(decision)
             db.commit()
 
     # -- helpers ---------------------------------------------------------
@@ -244,6 +247,147 @@ class ObjectiveApiTests(unittest.TestCase):
         payload = json.loads(message["body"])
         self.assertEqual(payload["key"], objective["key"])
         self.assertIn("verdict", payload)
+
+    # -- coverage and evidence integrity --------------------------------
+    def test_coverage_objective_expands_and_reaches_its_coverage_target(self) -> None:
+        objective = self._delegate(
+            template="coverage",
+            budget=240,
+            criteria=[
+                {"kind": "min_endpoints", "value": 2},
+                {"kind": "min_route_coverage", "value": 0.4},
+            ],
+        )
+        report = self._run(objective["id"], max_tasks=40)
+        verdict = report["verdict"]
+        self.assertEqual(verdict["status"], "completed", verdict)
+        coverage = report["report"]["evidence"]["coverage"]
+        self.assertGreaterEqual(coverage["ratio"], 0.4, coverage)
+        self.assertGreater(coverage["discovered"], 1)
+
+        events = self.client.get(f"/api/v1/objectives/{objective['id']}/events", headers=HEADERS).json()
+        self.assertTrue(any(event["type"] == "plan.expanded" for event in events), events)
+
+        view = self.client.get(f"/api/v1/objectives/{objective['id']}/coverage", headers=HEADERS)
+        self.assertEqual(view.status_code, 200, view.text)
+        self.assertIn("ratio", view.json()["coverage"])
+
+    def test_tampered_evidence_blocks_the_objective(self) -> None:
+        created = self._delegate(template="auth", budget=200)
+        with SessionLocal() as db:
+            objective = db.get(Objective, UUID(created["id"]))
+            assert objective is not None
+            service = ObjectiveService(db)
+            audit_ready = False
+            for _ in range(30):
+                tasks = service.tasks(objective.id)
+                audit = next(task for task in tasks if task.kind == "audit")
+                if audit.status == "pending" and all(
+                    task.status == "done" for task in tasks if task.kind in {"recon", "probe", "verify"}
+                ):
+                    audit_ready = True
+                    break
+                step = service.run_step(objective)
+                if step.verdict.status.value != "running":
+                    break
+            self.assertTrue(audit_ready, "audit never became ready")
+
+            probe_task = next(
+                task
+                for task in service.tasks(objective.id)
+                if task.kind == "probe" and (task.outcome or {}).get("probes_run")
+            )
+            manifest = service.evidence_root / str(objective.id) / probe_task.key / "manifest.json"
+            self.assertTrue(manifest.exists(), manifest)
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            self.assertTrue(data["entries"], "tamper target has no entries")
+            data["entries"][0]["digest"] = "00" * 32
+            manifest.write_text(json.dumps(data), encoding="utf-8")
+
+            step = service.run_step(objective)
+            self.assertIn(step.task_status, {"failed", "blocked"})
+            self.assertEqual(step.verdict.status.value, "blocked")
+            self.assertIn("evidence audit failed", step.verdict.reason)
+
+    # -- autonomy rules v2 ----------------------------------------------
+    def _objective_policy(self, **overrides) -> dict:
+        payload = {
+            "enabled": True,
+            "target_allowlist": [self.target],
+            "mode": "objective",
+            "objective_template": "posture",
+            "max_objectives_per_day": 8,
+            "escalation_cooldown_minutes": 15,
+            "narrow_on_retry": True,
+            "approved_by": "unit-test",
+            "approval_statement": "Authorized objective delegation for continuous validation.",
+        }
+        payload.update(overrides)
+        response = self.client.put("/api/v1/autonomy", headers=HEADERS, json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()
+
+    def test_fleet_limit_stops_delegation(self) -> None:
+        self._objective_policy(max_active_objectives=1)
+        with SessionLocal() as db:
+            db.execute(update(HuntTarget).values(next_eligible_at=None, enabled=True, consecutive_failures=0))
+            db.commit()
+        first = self.client.post("/api/v1/autonomy/tick", headers=HEADERS).json()
+        self.assertEqual(first["action"], "delegate", first)
+        second = self.client.post("/api/v1/autonomy/tick", headers=HEADERS).json()
+        self.assertEqual(second["action"], "skip", second)
+        self.assertIn("fleet is full", second["reason"])
+
+    def test_blocked_objective_is_retried_narrowly(self) -> None:
+        self._objective_policy(max_objectives_per_day=8, narrow_on_retry=True)
+        with SessionLocal() as db:
+            db.execute(update(HuntTarget).values(next_eligible_at=None, enabled=True, consecutive_failures=0))
+            db.commit()
+
+            tenant = db.get(Tenant, self.tenant_id)
+            assert tenant is not None
+            service = ObjectiveService(db)
+            blocked = service.create(
+                tenant=tenant,
+                title="narrow source",
+                target_url=f"{self.target}/",
+                template="posture",
+                budget_requests=60,
+                per_task_budget=10,
+                criteria_payload=[
+                    {"kind": "finding_present", "key": "definitely-not-a-real-finding"},
+                    {"kind": "min_probes", "value": 2},
+                ],
+                safety_ceiling="read_only",
+                priority=6,
+                deadline_minutes=120,
+                description="",
+                actor="unit-test",
+                origin="autonomy",
+            )
+            verdict = service.run_to_completion(blocked, max_tasks=25)
+            self.assertEqual(verdict.status.value, "blocked", verdict)
+            self.assertEqual(blocked.status, "blocked")
+
+            policy = AutonomyService(db).get_policy(self.tenant_id)
+            assert policy is not None
+            db.execute(update(HuntTarget).values(next_eligible_at=None, enabled=True, consecutive_failures=0))
+            db.commit()
+            report = AutonomyService(db).tick_policy(policy, now=datetime.now(UTC) + timedelta(hours=4), force=True)
+
+        self.assertEqual(report.action, "delegate-narrow", report)
+        self.assertIn("narrow retry", report.reason)
+
+        with SessionLocal() as db:
+            narrow = db.scalars(
+                select(Objective).where(Objective.origin == "autonomy").order_by(Objective.created_at.desc())
+            ).first()
+            assert narrow is not None
+            kinds = {str(item.get("kind")) for item in narrow.criteria}
+            # Only the criterion that actually failed is retried; the one that
+            # passed is not requested again.
+            self.assertEqual(kinds, {"finding_present"})
+            self.assertIn("retry", narrow.title)
 
     # -- autonomy on objectives -----------------------------------------
     def test_autonomy_delegates_an_objective_in_objective_mode(self) -> None:
