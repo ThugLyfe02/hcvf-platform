@@ -2,6 +2,35 @@
 
 All notable changes are recorded here. The project follows semantic versioning.
 
+## [0.11.0] - 2026-11-03
+
+### Added
+
+- **Findings triage workflow**: validated status transitions (409 with the
+  allowed set), assignment, append-only `finding_notes` history, audit-chain
+  entries and `finding.triaged` webhooks.
+- **SLA tracking**: severity windows (24h critical through 45d info), a
+  backfill for existing rows, and `GET /api/v1/findings/summary` with aging
+  buckets and overdue findings.
+- **Asset inventory** (`assets`, migration 0012): routes observed per tenant with
+  first/last seen, role, objective count, finding count and active/stale status;
+  `GET /api/v1/assets`, `/summary` and `/changes` with new/stale sets.
+- **Outbox dead letters**: admin listing plus retry and discard endpoints, with
+  audit entries for both actions.
+- **Console**: finding detail page with triage form and decision history, assets
+  page with change KPIs, dashboard SLA-overdue KPI.
+
+### Changed
+
+- `PATCH /findings/{id}` now rejects invalid transitions with 409 (unknown
+  status remains 400) and records the note instead of discarding it.
+- New campaign findings receive an `sla_due_at` deadline on creation.
+
+### Fixed
+
+- The findings API no longer silently accepts any status string.
+- Console navigation points at the new triage and asset views.
+
 ## [0.10.0] - 2026-11-03
 
 ### Added
