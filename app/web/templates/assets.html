@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Assets - HCVF Console{% endblock %}
+{% block content %}
+<section class="page-head"><div><h1>Asset inventory</h1><p class="muted">Routes the platform has observed, when it first saw them, and what changed.</p></div></section>
+<div class="kpis">
+  <div class="kpi"><span class="kpi-value">{{ summary.total }}</span><span class="kpi-label">observed routes</span></div>
+  <div class="kpi"><span class="kpi-value">{{ changes.new|length }}</span><span class="kpi-label">new in 7 days</span></div>
+  <div class="kpi"><span class="kpi-value">{{ changes.stale|length }}</span><span class="kpi-label">stale (30d)</span></div>
+  <div class="kpi"><span class="kpi-value">{{ summary.single_observation }}</span><span class="kpi-label">seen once</span></div>
+</div>
+<form class="filters" method="get" action="/console/assets">
+  <input name="q" value="{{ query }}" placeholder="search host or route">
+  <select name="role">
+    <option value="">any role</option>
+    {% for value in ['entry','auth','admin','api','data','other'] %}
+      <option value="{{ value }}" {% if role == value %}selected{% endif %}>{{ value }}</option>
+    {% endfor %}
+  </select>
+  <select name="status">
+    <option value="">any status</option>
+    {% for value in ['active','stale'] %}
+      <option value="{{ value }}" {% if status_filter == value %}selected{% endif %}>{{ value }}</option>
+    {% endfor %}
+  </select>
+  <button class="btn" type="submit">Filter</button>
+  <span class="muted small">{{ total }} route(s)</span>
+</form>
+<section class="card">
+<table class="table">
+  <thead><tr><th>Route</th><th>Host</th><th>Role</th><th>Status</th><th>First seen</th><th>Last seen</th><th>Objectives</th><th>Findings</th></tr></thead>
+  <tbody>
+  {% for asset in items %}
+    <tr>
+      <td class="mono small">{{ asset.route }}</td>
+      <td class="muted small">{{ asset.host }}</td>
+      <td><span class="tag">{{ asset.role }}</span></td>
+      <td><span class="badge {{ asset.status }}">{{ asset.status }}</span></td>
+      <td class="muted small">{{ asset.first_seen_at.strftime('%Y-%m-%d') if asset.first_seen_at else '' }}</td>
+      <td class="muted small">{{ asset.last_seen_at.strftime('%Y-%m-%d %H:%M') if asset.last_seen_at else '' }}</td>
+      <td class="mono">{{ asset.objective_count }}</td>
+      <td class="mono">{{ asset.finding_count }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="8" class="empty">No assets observed yet; complete an objective.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</section>
+<nav class="pager">
+  {% if has_prev %}<a class="btn ghost" href="{{ request.url.include_query_params(offset=offset - limit) }}">previous</a>{% endif %}
+  {% if has_next %}<a class="btn ghost" href="{{ request.url.include_query_params(offset=offset + limit) }}">next</a>{% endif %}
+</nav>
+{% endblock %}

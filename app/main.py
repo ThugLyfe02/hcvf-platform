@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.v1 import (
     admin_router,
+    assets_router,
     autonomy_router,
     campaign_runs_router,
     catalog_router,
@@ -85,6 +86,7 @@ app.include_router(governance_router)
 app.include_router(objectives_router)
 app.include_router(catalog_router)
 app.include_router(admin_router)
+app.include_router(assets_router)
 app.include_router(console_router)
 app.mount(
     "/console/static",

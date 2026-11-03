@@ -24,13 +24,14 @@ from app.models import (
     Base,
     Campaign,
     Finding,
+    FindingStatus,
     HuntTarget,
     Objective,
     ObjectiveEvent,
     Run,
     Tenant,
 )
-from app.services import memory_service
+from app.services import asset_service, findings_service, memory_service
 from app.services.objective_service import ObjectiveService
 
 
@@ -250,4 +251,53 @@ def health_view(db: Session, tenant: Tenant) -> dict[str, object]:
         "active_objectives": active,
         "engine_probes": len(probe_registry()),
         "tables": len(Base.metadata.tables),
+    }
+
+
+def finding_detail(db: Session, tenant: Tenant, finding_id: UUID) -> dict[str, object] | None:
+    finding = db.scalar(select(Finding).where(Finding.id == finding_id, Finding.tenant_id == tenant.id))
+    if finding is None:
+        return None
+    findings_service.ensure_sla(db, tenant.id)
+    db.commit()
+    return {
+        "finding": finding,
+        "notes": findings_service.notes(db, finding.id, limit=100),
+        "statuses": list(FindingStatus.ALL),
+        "sla_hours": findings_service.SLA_HOURS,
+        "transitions": sorted(findings_service.TRANSITIONS.get(finding.status, set())),
+    }
+
+
+def triage_summary(db: Session, tenant: Tenant) -> dict[str, object]:
+    result = findings_service.summary(db, tenant)
+    db.commit()
+    return result
+
+
+def assets_page(
+    db: Session,
+    tenant: Tenant,
+    *,
+    query: str = "",
+    role: str = "",
+    status_filter: str = "",
+    offset: int = 0,
+    limit: int = 50,
+) -> dict[str, object]:
+    items, total = asset_service.list_assets(
+        db, tenant.id, query=query, role=role, status_filter=status_filter, offset=offset, limit=limit
+    )
+    return {
+        "items": items,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_prev": offset > 0,
+        "has_next": offset + limit < total,
+        "summary": asset_service.summary(db, tenant.id),
+        "changes": asset_service.changes(db, tenant.id, days=7),
+        "query": query,
+        "role": role,
+        "status_filter": status_filter,
     }

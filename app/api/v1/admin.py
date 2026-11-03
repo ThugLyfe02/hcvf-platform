@@ -15,16 +15,18 @@ import csv
 import io
 import json
 import zipfile
+from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.security import require_admin
 from app.db.session import get_db
-from app.models import AuditLog, Finding, Objective, Tenant
+from app.models import AuditLog, Finding, Objective, Outbox, Tenant
+from app.services.audit_service import AuditService
 from app.services.objective_artifacts import build_markdown, build_sarif, sign, write_artifacts
 from app.services.objective_service import ObjectiveService
 
@@ -208,3 +210,93 @@ def export_bundle(
             "X-HCVF-Evidence-Key": "configured" if settings.console_secret else "derived",
         },
     )
+
+
+@router.get("/outbox/dead")
+def outbox_dead_letters(
+    tenant: Tenant = Depends(require_admin),
+    db: Session = Depends(get_db),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> list[dict[str, object]]:
+    """Intents the relay gave up on. Nothing disappearing silently."""
+
+    from sqlalchemy import select as _select
+
+    rows = db.scalars(
+        _select(Outbox)
+        .where(Outbox.published_at.is_(None), Outbox.attempts >= 1)
+        .order_by(Outbox.attempts.desc(), Outbox.available_at.asc())
+        .limit(limit)
+    )
+    return [
+        {
+            "id": str(entry.id),
+            "topic": entry.topic,
+            "attempts": entry.attempts,
+            "last_error": entry.last_error,
+            "available_at": entry.available_at.isoformat() if entry.available_at else "",
+            "payload_keys": sorted((entry.payload or {}).keys()),
+        }
+        for entry in rows
+    ]
+
+
+@router.post("/outbox/{outbox_id}/retry")
+def outbox_retry(
+    outbox_id: str,
+    request: Request,
+    tenant: Tenant = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    from uuid import UUID as _UUID
+
+    try:
+        entry = db.get(Outbox, _UUID(outbox_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="outbox id must be a UUID") from exc
+    if entry is None or entry.published_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Outbox entry not found")
+    entry.attempts = 0
+    entry.available_at = datetime.now(UTC)
+    entry.last_error = ""
+    AuditService(db).record(
+        tenant_id=tenant.id,
+        action="outbox.retry",
+        details={"outbox": str(entry.id), "topic": entry.topic},
+        user_id=getattr(request.state, "actor", "admin"),
+        resource_type="outbox",
+        resource_id=str(entry.id),
+        request_id=getattr(request.state, "request_id", None),
+    )
+    db.commit()
+    return {"id": str(entry.id), "attempts": entry.attempts, "status": "queued"}
+
+
+@router.post("/outbox/{outbox_id}/discard")
+def outbox_discard(
+    outbox_id: str,
+    request: Request,
+    tenant: Tenant = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    from uuid import UUID as _UUID
+
+    try:
+        entry = db.get(Outbox, _UUID(outbox_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="outbox id must be a UUID") from exc
+    if entry is None or entry.published_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Outbox entry not found")
+    entry.published_at = datetime.now(UTC)
+    entry.last_error = f"discarded by {getattr(request.state, 'actor', 'admin')}"[:512]
+    AuditService(db).record(
+        tenant_id=tenant.id,
+        action="outbox.discard",
+        details={"outbox": str(entry.id), "topic": entry.topic},
+        user_id=getattr(request.state, "actor", "admin"),
+        resource_type="outbox",
+        resource_id=str(entry.id),
+        request_id=getattr(request.state, "request_id", None),
+    )
+    db.commit()
+    return {"id": str(entry.id), "status": "discarded"}

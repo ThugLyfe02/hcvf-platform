@@ -10,8 +10,10 @@ from app.models.objective import Objective, ObjectiveEvent, ObjectiveTask
 from app.models.outbox import Outbox
 from app.models.run import Run, RunStatus
 from app.models.tenant import Tenant, TenantRole
+from app.models.triage import Asset, FindingNote
 
 __all__ = [
+    "Asset",
     "AuditLog",
     "AutonomyDecision",
     "AutonomyPolicy",
@@ -20,6 +22,7 @@ __all__ = [
     "CampaignStatus",
     "EvidenceBlob",
     "Finding",
+    "FindingNote",
     "FindingStatus",
     "FindingSuppression",
     "HuntTarget",

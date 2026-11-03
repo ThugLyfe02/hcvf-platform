@@ -65,7 +65,7 @@ from app.engine.workforce.types import (
 )
 from app.engine.workforce.workers import TaskObservation, workers_for
 from app.models import Campaign, Objective, ObjectiveEvent, ObjectiveTask, Run, Tenant
-from app.services import memory_service, risk
+from app.services import asset_service, memory_service, risk
 from app.services.audit_service import AuditService
 from app.services.campaign_service import CampaignService
 from app.services.objective_artifacts import objective_diff, write_artifacts
@@ -913,6 +913,19 @@ class ObjectiveService:
             )
             self.db.commit()
         except OSError:
+            self.db.rollback()
+
+        try:
+            assets = asset_service.record_objective(self.db, objective, supervisor)
+            if assets:
+                self._event(
+                    objective,
+                    "assets.recorded",
+                    f"Inventory updated with {assets} route(s).",
+                    {"assets": assets},
+                )
+                self.db.commit()
+        except Exception:
             self.db.rollback()
 
         try:

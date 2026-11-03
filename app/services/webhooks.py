@@ -24,6 +24,7 @@ SUPPORTED_EVENTS = (
     "finding.recurring",
     "objective.completed",
     "objective.failed",
+    "finding.triaged",
 )
 
 

@@ -26,7 +26,7 @@
   {% for finding in page.items %}
     <tr>
       <td><span class="badge {{ finding.severity }}">{{ finding.severity }}</span></td>
-      <td>{{ finding.title }}{% if finding.cwe %}<div class="muted small mono">{{ finding.cwe }}</div>{% endif %}</td>
+      <td><a href="/console/findings/{{ finding.id }}">{{ finding.title }}</a>{% if finding.cwe %}<div class="muted small mono">{{ finding.cwe }}</div>{% endif %}</td>
       <td class="mono small">{{ finding.kind }}</td>
       <td><span class="badge {{ finding.status }}">{{ finding.status }}</span></td>
       <td class="muted small">{{ finding.last_seen_at.strftime('%Y-%m-%d %H:%M') if finding.last_seen_at else '' }}</td>

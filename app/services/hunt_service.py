@@ -48,6 +48,7 @@ from app.models import (
     Tenant,
 )
 from app.services import risk, suppressions, webhooks
+from app.services.findings_service import SLA_HOURS
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,10 @@ class DbKillSwitch(KillSwitch):
         requested = self.db.scalar(select(Run.cancel_requested).where(Run.id == self.run_id))
         if requested:
             self.halt("cancelled by operator")
+
+
+def _sla_hours(severity: str) -> int:
+    return SLA_HOURS.get(severity, SLA_HOURS["info"])
 
 
 class HuntService:
@@ -205,6 +210,7 @@ class HuntService:
                     severity=finding.severity.value,
                     confidence=finding.confidence,
                     status=FindingStatus.open,
+                    sla_due_at=datetime.now(UTC) + timedelta(hours=_sla_hours(finding.severity.value)),
                     cwe=finding.cwe,
                     title=finding.title[:255],
                     detail=finding.detail,

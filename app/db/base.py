@@ -47,6 +47,7 @@ def import_models() -> None:
     from app.models.outbox import Outbox
     from app.models.run import Run
     from app.models.tenant import Tenant
+    from app.models.triage import Asset, FindingNote
 
     _ = (
         Tenant,
@@ -67,4 +68,6 @@ def import_models() -> None:
         ObjectiveTask,
         ObjectiveEvent,
         ObjectiveMemory,
+        Asset,
+        FindingNote,
     )

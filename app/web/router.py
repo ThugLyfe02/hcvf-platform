@@ -19,7 +19,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models import Objective, Tenant
+from app.models import Finding, Objective, Tenant
+from app.services import findings_service
+from app.services.findings_service import TriageError
 from app.services.objective_service import ObjectiveError, ObjectiveService
 from app.web import views
 from app.web.auth import COOKIE_NAME, SESSION_SECONDS, current_tenant, issue_token, resolve_tenant
@@ -33,6 +35,7 @@ NAV = (
     {"href": "/console", "label": "Overview"},
     {"href": "/console/objectives", "label": "Objectives"},
     {"href": "/console/findings", "label": "Findings"},
+    {"href": "/console/assets", "label": "Assets"},
     {"href": "/console/runs", "label": "Runs"},
     {"href": "/console/autonomy", "label": "Autonomy"},
     {"href": "/console/memory", "label": "Memory"},
@@ -107,6 +110,8 @@ def dashboard(
     request: Request, tenant: Tenant = Depends(current_tenant), db: Session = Depends(get_db)
 ) -> HTMLResponse:
     context = views.dashboard(db, tenant)
+    triage = views.triage_summary(db, tenant)
+    context["overdue_count"] = triage.get("overdue_count", 0)
     context["templates"] = views.templates_view()
     context["workers"] = views.workers_view()
     return _render(request, "dashboard.html", context)
@@ -219,6 +224,66 @@ def findings_page(
         "findings.html",
         {"page": page, "severity": severity, "status_filter": finding_status, "query": q},
     )
+
+
+@router.get("/findings/{finding_id}", response_class=HTMLResponse)
+def finding_detail(
+    finding_id: UUID,
+    request: Request,
+    tenant: Tenant = Depends(current_tenant),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    detail = views.finding_detail(db, tenant, finding_id)
+    if detail is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Finding not found")
+    return _render(request, "finding_detail.html", detail)
+
+
+@router.post("/findings/{finding_id}/triage")
+async def finding_triage(
+    finding_id: UUID,
+    request: Request,
+    tenant: Tenant = Depends(current_tenant),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    body = (await request.body()).decode("utf-8", "replace")
+    form = parse_qs(body, keep_blank_values=True)
+    status_value = (form.get("status") or [""])[0]
+    note = (form.get("note") or [""])[0]
+    assignee = (form.get("assignee") or [""])[0] or None
+    finding = db.scalar(select(Finding).where(Finding.id == finding_id, Finding.tenant_id == tenant.id))
+    if finding is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Finding not found")
+    try:
+        findings_service.triage(
+            db,
+            tenant=tenant,
+            finding=finding,
+            status=status_value or finding.status,
+            actor=getattr(request.state, "actor", "console"),
+            note=note,
+            assignee=assignee,
+            request_id=getattr(request.state, "request_id", None),
+        )
+        db.commit()
+    except TriageError:
+        db.rollback()
+    return RedirectResponse(f"/console/findings/{finding_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.get("/assets", response_class=HTMLResponse)
+def assets_page(
+    request: Request,
+    tenant: Tenant = Depends(current_tenant),
+    db: Session = Depends(get_db),
+    q: str = Query(default=""),
+    role: str = Query(default=""),
+    asset_status: str = Query(default="", alias="status"),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=5, le=200),
+) -> HTMLResponse:
+    context = views.assets_page(db, tenant, query=q, role=role, status_filter=asset_status, offset=offset, limit=limit)
+    return _render(request, "assets.html", context)
 
 
 @router.get("/runs", response_class=HTMLResponse)

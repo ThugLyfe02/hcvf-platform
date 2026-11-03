@@ -49,6 +49,11 @@ class Finding(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     #: one issue seen N times, not N issues. `last_run_id` keeps per-run reports
     #: accurate after the row has been carried forward.
     occurrences: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    #: Triage ownership and SLA; set on first decision and surfaced by /findings/summary.
+    assignee: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    triaged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    triaged_by: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    sla_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_run_id: Mapped[UUID | None] = mapped_column(GUID(), nullable=True, index=True)
 
