@@ -61,7 +61,7 @@ Objective mode adds ten rules:
 |---|---|
 | `max_objectives_per_day` | daily delegation cap |
 | `objective_budget_requests` | budget per delegated objective |
-| `objective_template` | fixed doctrine, or `custom`/auto for gap analysis |
+| `objective_template` | fixed doctrine (`adaptive` allowed), or `custom`/auto for gap analysis |
 | `template_auto` | always choose by gap analysis + rotation |
 | `escalation_cooldown_minutes` | how long a blocked template rests |
 | `narrow_on_retry` | retry only the criteria that failed |

@@ -2,6 +2,39 @@
 
 All notable changes are recorded here. The project follows semantic versioning.
 
+## [0.9.0] - 2026-11-03
+
+### Added
+
+- **Adaptive planning** (`app/engine/workforce/replan.py`): after every result
+  the supervisor rebuilds the belief and adds the next request with the best
+  expected information gain, capped at ten adaptive tasks and by remaining budget.
+  New `adaptive` template.
+- **Surface graph** (`app/engine/workforce/surface.py`): nodes per discovered
+  route plus implied ancestors, role, value, saturation, findings and risk;
+  frontier of unprobed (route, probe) pairs.
+- **Cross-objective memory** (`objective_memory`, migration 0011,
+  `app/services/memory_service.py`): per-host recipes with attempts, findings,
+  verified and refuted counts; capped boost in planning; `GET /api/v1/memory`.
+- **Signed artifacts** (`app/services/objective_artifacts.py`): every terminal
+  objective writes signed SARIF + Markdown, served with `X-HCVF-Signature` and
+  `X-HCVF-SHA256`.
+- **Objective diff**: `GET /objectives/{id}/diff` returns new, fixed and
+  recurring finding kinds against the previous completed objective.
+- **Objective metrics**: objectives by template/status, tasks by worker/status,
+  coverage ratio, planned information gain, refuted verifications, memory updates.
+
+### Changed
+
+- A done probe or verifier task now triggers a fresh adaptive selection, so the
+  plan is a sequence of decisions rather than a fixed list.
+- The `adaptive` template is accepted by the objectives API and by autonomy.
+
+### Fixed
+
+- The surface graph only connected routes whose exact parent was discovered;
+  implied ancestors are now part of the graph.
+
 ## [0.8.0] - 2026-11-03
 
 ### Added

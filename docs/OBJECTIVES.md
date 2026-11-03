@@ -112,6 +112,14 @@ HEAD and classifies the failure ? transport, authentication wall, stale
 route, throttling, origin outage ? and the blocked verdict carries that
 explanation. Failures become knowledge instead of error strings.
 
+## 3d. Adaptive template: re-plan after every result
+
+The `adaptive` template seeds three probes, then hands planning to
+[ADAPTIVE.md](ADAPTIVE.md): the supervisor rebuilds a surface graph and a
+posterior after each task and adds the next request with the best expected
+information gain. Up to ten adaptive tasks are planned per objective, bounded
+by the remaining budget, so the template cannot become an unbounded crawler.
+
 ## 4. How completion is decided
 
 ```
@@ -196,6 +204,16 @@ When an objective blocks, the controller records the exact criteria that
 failed. After `escalation_cooldown_minutes`, if `narrow_on_retry` is enabled,
 the next delegation for that target asks **only for those criteria** ? not
 for the whole doctrine. The previous criterion that passed is not re-requested.
+
+## 7b. Memory and artifacts
+
+On a terminal verdict the objective records per-host recipes
+(`objective_memory`): attempts, findings, verified and refuted counts per
+probe x route role. The adaptive planner reads them as a capped boost
+(`GET /api/v1/memory` shows them). The same verdict writes signed SARIF and
+Markdown next to the evidence and exposes them through the API with
+`X-HCVF-Signature` and `X-HCVF-SHA256`. `GET /objectives/{id}/diff` compares
+finding kinds against the previous completed objective on the same target.
 
 ## 8. Notifications
 
