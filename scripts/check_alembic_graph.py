@@ -53,6 +53,13 @@ def load_revisions() -> dict[str, str | None]:
         if revision in revisions:
             print(f"[FAIL] duplicate revision id {revision!r} in {path.name}", file=sys.stderr)
             raise SystemExit(1)
+        if len(revision) > 32:
+            print(
+                f"[FAIL] revision id {revision!r} is {len(revision)} characters; "
+                "alembic's version_num column is VARCHAR(32)",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
         down = values.get("down_revision")
         revisions[revision] = down if isinstance(down, str) else None
     return revisions

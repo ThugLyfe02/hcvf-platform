@@ -49,6 +49,11 @@ All notable changes are recorded here. The project follows semantic versioning.
   second for the same tenant.
 - Objective outcomes looked up hunt targets by full URL while targets are stored
   as origins; the escalation cooldown never fired.
+- The revision id `0002_add_cancelled_campaign_status` (34 chars) exceeded
+  Alembic's `version_num` column (VARCHAR(32)), so a real PostgreSQL upgrade
+  failed with StringDataRightTruncation; ids are now capped and checked.
+- Two DELETE routes declared 204 with a response model, which FastAPI rejects
+  at import time on the pinned version; they now return an explicit body.
 
 ## [0.6.0] — 2026-11-03
 

@@ -16,3 +16,7 @@ evidence/
 .ruff_cache/
 .mypy_cache/
 .tmp/
+
+.pytest_cache/
+pytest-cache-files-*/
+.coverage

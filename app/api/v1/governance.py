@@ -99,13 +99,16 @@ def add_webhook(
     }
 
 
-@router.delete("/webhooks/{webhook_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_webhook(webhook_id: UUID, admin: Tenant = Depends(require_admin), db: Session = Depends(get_db)) -> None:
+@router.delete("/webhooks/{webhook_id}")
+def delete_webhook(
+    webhook_id: UUID, admin: Tenant = Depends(require_admin), db: Session = Depends(get_db)
+) -> dict[str, bool]:
     hook = db.scalar(select(Webhook).where(Webhook.id == webhook_id, Webhook.tenant_id == admin.id))
     if hook is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
     db.delete(hook)
     db.commit()
+    return {"deleted": True}
 
 
 # -- finding suppressions ---------------------------------------------------
@@ -174,12 +177,13 @@ def add_suppression(
     return _suppression_response(rule)
 
 
-@router.delete("/suppressions/{suppression_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/suppressions/{suppression_id}")
 def delete_suppression(
     suppression_id: UUID, tenant: Tenant = Depends(get_current_tenant), db: Session = Depends(get_db)
-) -> None:
+) -> dict[str, bool]:
     if not suppressions.delete(db, tenant_id=tenant.id, suppression_id=suppression_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Suppression not found")
+    return {"deleted": True}
 
 
 # -- audit chain ------------------------------------------------------------

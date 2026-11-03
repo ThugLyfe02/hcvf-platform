@@ -276,8 +276,8 @@ Three problems:
 `app/api/v1/campaigns.py:153-157`:
 
 ```python
-run = service.create_run(...)   # commits run=queued, campaign=queued
-execute_campaign.delay(...)     # ← can raise; nothing compensates
+run = service.create_run(...)  # commits run=queued, campaign=queued
+execute_campaign.delay(...)  # ← can raise; nothing compensates
 ```
 
 If Redis is unavailable, the client gets a 500 *after* the run and campaign rows are committed as `queued`. Nothing will ever dequeue them. The campaign is stuck: not running (so `cancel` works only because the status is `queued`), never executing, no error surfaced. The scheduler ignores `queued` campaigns (it only claims `draft`).
