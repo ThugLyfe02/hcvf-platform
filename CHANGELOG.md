@@ -2,6 +2,38 @@
 
 All notable changes are recorded here. The project follows semantic versioning.
 
+## [0.10.0] - 2026-11-03
+
+### Added
+
+- **Operator console** (`app/web`): server-rendered pages at `/console` with an
+  API-key-to-signed-cookie session, dashboard, objectives with live SSE events,
+  findings, runs, autonomy, memory, workforce, audit and runtime pages.
+  Thirteen Jinja2 templates, one CSS file, one dependency-free JS file.
+- **SSE streams**: `/console/objectives/{id}/events.sse` and
+  `/api/v1/objectives/{id}/events/stream` replay durable objective events and
+  close on a terminal objective.
+- **Signed admin exports**: findings, audit and objectives CSV, and a single
+  evidence bundle zip per objective, all with `X-HCVF-Signature` and
+  `X-HCVF-SHA256`; members get 403 and bundles are capped at 64 MiB.
+- **Four artefact probes** (18 total): `secrets-in-bundle` (masked credential
+  shapes), `source-map-exposure`, `dependency-manifest` and
+  `cache-poisoning-surface` (forwarding-header reflection with cache indicators).
+- `HCVF_CONSOLE_SECRET` setting for console session signing.
+
+### Changed
+
+- The exposure doctrine now includes the artefact probes; the posture doctrine
+  includes cache trust. All four are read-only and excluded from default hunts
+  to keep classic run profiles stable.
+- The fixture application now serves a bundle with a planted credential, a
+  source map, a manifest and a reflecting cache route.
+
+### Fixed
+
+- Console login parses its urlencoded body directly instead of requiring
+  `python-multipart` as a deployment dependency.
+
 ## [0.9.0] - 2026-11-03
 
 ### Added

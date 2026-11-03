@@ -205,7 +205,7 @@ worker/              Celery task, scheduler loop (outbox relay + reaper)
 alembic/             6 migrations, single head
 scripts/             preflight, diagnostics, bootstrap, smoke, alembic graph check
 tests/unit/          66 tests, no external services required
-docs/                architecture, agentic design, objectives, workers, adaptive, ADRs
+docs/                architecture, agentic design, objectives, workers, adaptive, console, ADRs
 ```
 
 ## Development
@@ -238,6 +238,9 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`SECURITY.md`](SECURITY.md).
 | `GET /api/v1/objectives/{id}/report.sarif` / `report.md` | signed, portable objective reports |
 | `GET /api/v1/objectives/{id}/diff` | new / fixed / recurring findings vs the previous objective |
 | `GET /api/v1/memory` | learned probe/route recipes per host |
+| `GET /api/v1/objectives/{id}/events/stream` | SSE of objective events |
+| `GET /api/v1/admin/export/{findings,audit,objectives}.csv` | signed CSV exports (admin) |
+| `GET /api/v1/admin/bundle/{id}.zip` | signed evidence + reports archive (admin) |
 | `POST /api/v1/tenants/{id}/rotate-key` | rotate a tenant key |
 | `GET .../runs/{id}/diff` | baseline comparison |
 | `GET .../runs/{id}/evidence/verify` | recompute Merkle root, signature and blobs |
