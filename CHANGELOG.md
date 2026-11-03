@@ -2,6 +2,42 @@
 
 All notable changes are recorded here. The project follows semantic versioning.
 
+## [0.8.0] - 2026-11-03
+
+### Added
+
+- Coverage planning from the route graph: role classification, role-appropriate
+  probe assignment, breadth-first budget spend, measured coverage and the
+  `min_route_coverage` acceptance criterion.
+- Dynamic plan expansion after recon (`plan.expanded`): the plan grows with the
+  routes that were actually discovered, deduplicated and budget-bounded.
+- `auditor-worker`: re-verifies every manifest (format, HMAC signature, Merkle
+  root, blob presence) before the report; one tampered leaf blocks the objective.
+- `diagnose-worker`: one HEAD classifies a hard failure before it becomes final.
+- Narrow retry: a blocked objective escalates into a retry for exactly the
+  criteria that failed, after the cooldown.
+- Fleet and budget governance: `max_active_objectives`,
+  `daily_objective_requests`, `template_auto`, `template_history`.
+- `GET /api/v1/objectives/{id}/coverage`: measured coverage and remaining gap.
+
+### Changed
+
+- Every plan ends with an audit task before the report; a report cannot be
+  written over unverified evidence.
+- A failed task is diagnosed before the objective blocks; the blocked verdict
+  carries the explanation.
+- TickReport reports `delegate-narrow`, and decisions record the alternatives
+  considered.
+
+### Fixed
+
+- Coverage expansion treated its own base plan as already expanded, so
+  discovered routes never produced tasks.
+- Escalation decisions stored a full URL while retry lookup compared origins,
+  so narrow retry could never fire.
+- Persisted outcomes dropped their route, making measured coverage zero after a
+  reload.
+
 ## [0.7.0] — 2026-11-03
 
 ### Added
