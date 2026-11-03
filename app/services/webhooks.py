@@ -18,7 +18,13 @@ from app.engine.policy import EgressPolicy
 from app.models import Tenant, Webhook
 from app.services.outbox import enqueue
 
-SUPPORTED_EVENTS = ("run.completed", "run.failed", "finding.recurring")
+SUPPORTED_EVENTS = (
+    "run.completed",
+    "run.failed",
+    "finding.recurring",
+    "objective.completed",
+    "objective.failed",
+)
 
 
 def create_webhook(db: Session, *, tenant: Tenant, url: str, events: list[str]) -> tuple[Webhook, str]:

@@ -570,7 +570,36 @@ class ObjectiveService:
                 AutonomyService(self.db).record_objective_outcome(objective)
             except Exception:
                 self.db.rollback()
+
+        self._publish_outcome(objective, verdict)
         return StepResult(objective.id, "", verdict.status.value, verdict, objective.requests_used)
+
+    def _publish_outcome(self, objective: Objective, verdict: Verdict) -> None:
+        """Notify subscribed webhooks. Notification failure never changes a verdict."""
+
+        from app.services import webhooks
+
+        try:
+            webhooks.publish(
+                self.db,
+                tenant_id=objective.tenant_id,
+                event=("objective.completed" if verdict.status is ObjectiveStatus.completed else "objective.failed"),
+                payload={
+                    "objective_id": str(objective.id),
+                    "key": objective.key,
+                    "title": objective.title,
+                    "target": objective.target_url,
+                    "status": verdict.status.value,
+                    "verdict": verdict.reason,
+                    "findings": int((objective.result or {}).get("evidence", {}).get("findings", 0) or 0),
+                    "verified": int((objective.result or {}).get("evidence", {}).get("verified", 0) or 0),
+                    "requests_used": objective.requests_used,
+                    "unmet": list(verdict.unmet),
+                },
+            )
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
 
     # -- operator actions -------------------------------------------------
     def cancel(self, objective: Objective, *, actor: str, request_id: str | None = None) -> Objective:

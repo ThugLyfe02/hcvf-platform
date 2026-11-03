@@ -24,6 +24,9 @@ All notable changes are recorded here. The project follows semantic versioning.
 - **Objectives API**: create/list/get, tasks, events, `step`, `run`, `cancel`,
   `report`, plus `GET /api/v1/workers` and `/objective-templates`.
 - **Objective worker loop** (`worker/objectives.py`) wired into the scheduler.
+- **Objective webhooks**: terminal objectives emit `objective.completed` or
+  `objective.failed` with the verdict, evidence counts and unmet criteria,
+  signed with the same HMAC scheme as run events.
 
 ### Changed
 

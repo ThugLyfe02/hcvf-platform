@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import os
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from uuid import UUID
 
@@ -22,11 +27,35 @@ from sqlalchemy import select, update
 from app.core.config import settings
 from app.db.session import SessionLocal, engine
 from app.models import Base, HuntTarget, Objective, ObjectiveTask, Tenant
+from app.services import webhooks
 from app.services.autonomy_service import AutonomyService
 from app.services.objective_service import ObjectiveService
+from app.services.outbox import dispatch_pending
 from tests.fixtures.vulnerable_app import running_fixture
 
 HEADERS = {settings.api_key_header: "dev-hcvf-key"}
+
+
+RECEIVED: list[dict] = []
+
+
+class _Receiver(BaseHTTPRequestHandler):
+    def log_message(self, format: str, *args) -> None:
+        return
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length", "0") or 0)
+        body = self.rfile.read(length) if length else b""
+        RECEIVED.append(
+            {
+                "body": body,
+                "signature": self.headers.get("X-HCVF-Signature", ""),
+                "event": self.headers.get("X-HCVF-Event", ""),
+                "timestamp": self.headers.get("X-HCVF-Timestamp", ""),
+            }
+        )
+        self.send_response(204)
+        self.end_headers()
 
 
 class ObjectiveApiTests(unittest.TestCase):
@@ -35,6 +64,9 @@ class ObjectiveApiTests(unittest.TestCase):
         Base.metadata.create_all(bind=engine)
         cls.fixture = running_fixture()
         cls.target = cls.fixture.__enter__()
+        cls.receiver = ThreadingHTTPServer(("127.0.0.1", 0), _Receiver)
+        threading.Thread(target=cls.receiver.serve_forever, daemon=True).start()
+        cls.receiver_url = f"http://127.0.0.1:{cls.receiver.server_address[1]}/hook"
 
         from app.main import app
 
@@ -53,6 +85,8 @@ class ObjectiveApiTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls) -> None:
         cls.client.__exit__(None, None, None)
+        cls.receiver.shutdown()
+        cls.receiver.server_close()
         cls.fixture.__exit__(None, None, None)
         engine.dispose()
 
@@ -177,6 +211,39 @@ class ObjectiveApiTests(unittest.TestCase):
         self.assertEqual(cancelled.json()["status"], "cancelled")
         tasks = self._tasks(objective["id"])
         self.assertTrue(all(task["status"] == "skipped" for task in tasks))
+
+    def test_completion_emits_a_signed_objective_webhook(self) -> None:
+        RECEIVED.clear()
+        hook = self.client.post(
+            "/api/v1/webhooks",
+            headers=HEADERS,
+            json={"url": self.receiver_url, "events": ["objective.completed"]},
+        )
+        self.assertEqual(hook.status_code, 201, hook.text)
+        secret = hook.json()["secret"]
+
+        objective = self._delegate(budget=120)
+        self._run(objective["id"], max_tasks=20)
+
+        with SessionLocal() as db:
+            delivered = dispatch_pending(
+                db,
+                lambda topic, payload: webhooks.deliver_payload(payload) if topic == "webhook.deliver" else None,
+                limit=50,
+            )
+        self.assertGreaterEqual(delivered, 1)
+        self.assertTrue(RECEIVED, "objective completion did not reach the webhook")
+        message = RECEIVED[-1]
+        self.assertEqual(message["event"], "objective.completed")
+        expected = hmac.new(
+            secret.encode(),
+            f"{message['timestamp']}.".encode() + message["body"],
+            hashlib.sha256,
+        ).hexdigest()
+        self.assertEqual(message["signature"], f"sha256={expected}")
+        payload = json.loads(message["body"])
+        self.assertEqual(payload["key"], objective["key"])
+        self.assertIn("verdict", payload)
 
     # -- autonomy on objectives -----------------------------------------
     def test_autonomy_delegates_an_objective_in_objective_mode(self) -> None:

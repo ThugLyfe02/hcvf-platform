@@ -157,7 +157,15 @@ it and writes an `escalate` decision with the cooldown.
 - **A scan cannot be resumed.** Objectives are durable; work continues after a
   restart at the next ready task.
 
-## 8. Deliberate limits
+## 8. Notifications
+
+A terminal objective emits `objective.completed` or `objective.failed` to every
+subscribed webhook, signed with the same HMAC scheme as run events and carrying
+the objective key, verdict, finding count, verified count, requests used and any
+unmet criteria. A delivery failure is retried by the outbox and never changes a
+verdict.
+
+## 9. Deliberate limits
 
 - No dynamic worker code execution. Workers are code, not prompts.
 - No objective can exceed the tenant's authorized targets or the grant's safety
