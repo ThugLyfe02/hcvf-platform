@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     hunt_lease_seconds: int = 600
     hunt_timeout_seconds: int = 300
     evidence_dir: str = "evidence"
+    #: HMAC key for console session cookies. Set HCVF_CONSOLE_SECRET in production.
+    console_secret: str = ""
     evidence_key: str = ""
     #: Development only: permit the engine to reach private/loopback addresses.
     allow_private_targets: bool = False

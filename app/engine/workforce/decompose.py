@@ -28,9 +28,23 @@ from app.engine.workforce.types import (
 
 #: Which probes each doctrine bundles.
 TEMPLATE_PROBES: dict[str, tuple[str, ...]] = {
-    "posture": ("security-headers", "tls-posture", "cookie-flags", "http-methods", "error-disclosure"),
+    "posture": (
+        "security-headers",
+        "tls-posture",
+        "cookie-flags",
+        "http-methods",
+        "error-disclosure",
+        "cache-poisoning-surface",
+    ),
     "auth": ("jwt-posture", "cors-policy", "cookie-flags"),
-    "exposure": ("exposed-config", "openapi-surface", "security-txt"),
+    "exposure": (
+        "exposed-config",
+        "openapi-surface",
+        "security-txt",
+        "secrets-in-bundle",
+        "source-map-exposure",
+        "dependency-manifest",
+    ),
     "coverage": ("security-headers", "cookie-flags", "cors-policy", "exposed-config"),
     # Seed only: after recon the adaptive planner picks by expected
     # information gain instead of following this list.
@@ -86,6 +100,10 @@ WORKER_BY_PROBE: dict[str, str] = {
     "rate-limit": "auth-worker",
     "exposed-config": "exposure-worker",
     "openapi-surface": "exposure-worker",
+    "secrets-in-bundle": "exposure-worker",
+    "source-map-exposure": "exposure-worker",
+    "dependency-manifest": "exposure-worker",
+    "cache-poisoning-surface": "config-worker",
     "security-txt": "exposure-worker",
     "surface-crawl": "recon-worker",
     "graphql-introspection": "surface-worker",
@@ -297,6 +315,12 @@ def _probes_from_criteria(criteria: tuple[Criterion, ...]) -> list[str]:
         "path-traversal": "exposed-config",
         "openapi-specification-exposed": "openapi-surface",
         "missing-security-txt": "security-txt",
+        "secret-in-bundle:aws-access-key": "secrets-in-bundle",
+        "secret-in-bundle:google-api-key": "secrets-in-bundle",
+        "secret-in-bundle:private-key": "secrets-in-bundle",
+        "source-map-published": "source-map-exposure",
+        "dependency-manifest:npm": "dependency-manifest",
+        "forwarded-header-reflected:x-forwarded-host": "cache-poisoning-surface",
         "graphql-introspection-enabled": "graphql-introspection",
         "open-redirect": "open-redirect",
     }

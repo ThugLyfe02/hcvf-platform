@@ -280,8 +280,19 @@ class TestProbeRegistry(unittest.TestCase):
             self.assertIn(cls.spec.safety, SafetyClass)
 
     def test_off_by_default_probes_are_state_changing_or_noisy(self) -> None:
+        #: Read-only probes kept out of the default hunt so classic run profiles
+        #: stay stable. They are opt-in through a doctrine or explicit request.
+        opt_in_read_only = {
+            "secrets-in-bundle",
+            "source-map-exposure",
+            "dependency-manifest",
+            "cache-poisoning-surface",
+        }
         for probe_id, cls in registry().items():
             if not cls.spec.default_enabled:
+                if probe_id in opt_in_read_only:
+                    self.assertIs(cls.spec.safety, SafetyClass.read_only, probe_id)
+                    continue
                 self.assertTrue(
                     cls.spec.safety >= SafetyClass.state_changing or cls.spec.false_positive_rate > 0.2,
                     probe_id,

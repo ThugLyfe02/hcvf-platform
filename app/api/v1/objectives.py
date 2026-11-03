@@ -5,7 +5,7 @@ from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -17,6 +17,7 @@ from app.models import Objective, Tenant
 from app.services import memory_service
 from app.services.objective_artifacts import build_markdown, build_sarif, sign
 from app.services.objective_service import ObjectiveError, ObjectiveService
+from app.web.streams import event_stream
 
 router = APIRouter(prefix="/api/v1/objectives", tags=["objectives"])
 
@@ -253,6 +254,26 @@ def objective_report(
     if objective is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Objective not found")
     return service.report(objective)
+
+
+@router.get("/{objective_id}/events/stream")
+def objective_event_stream(
+    objective_id: UUID,
+    tenant: Tenant = Depends(require_scope("campaigns:read")),
+    db: Session = Depends(get_db),
+    once: bool = Query(default=False),
+) -> StreamingResponse:
+    """Server-sent events for an objective, for dashboards and CI watchers."""
+
+    service = ObjectiveService(db)
+    objective = service.get(tenant_id=tenant.id, objective_id=objective_id)
+    if objective is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Objective not found")
+    return StreamingResponse(
+        event_stream(objective_id=objective.id, tenant_id=tenant.id, once=once),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/{objective_id}/coverage")

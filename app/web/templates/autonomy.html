@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Autonomy - HCVF Console{% endblock %}
+{% block content %}
+<section class="page-head"><div><h1>Autonomy</h1><p class="muted">Standing authorization, fleet limits and every decision it made.</p></div></section>
+{% if policy %}
+<section class="card">
+  <div class="grid four">
+    <div class="kpi"><span class="kpi-value">{{ 'enabled' if policy.enabled else 'disabled' }}</span><span class="kpi-label">controller</span></div>
+    <div class="kpi"><span class="kpi-value">{{ policy.mode }}</span><span class="kpi-label">mode</span></div>
+    <div class="kpi"><span class="kpi-value">{{ policy.objective_template }}</span><span class="kpi-label">template</span></div>
+    <div class="kpi"><span class="kpi-value">{{ policy.max_active_objectives }}</span><span class="kpi-label">fleet cap</span></div>
+    <div class="kpi"><span class="kpi-value">{{ policy.daily_objective_requests }}</span><span class="kpi-label">daily requests</span></div>
+    <div class="kpi"><span class="kpi-value">{{ policy.escalation_cooldown_minutes }}m</span><span class="kpi-label">cooldown</span></div>
+    <div class="kpi"><span class="kpi-value">{{ 'on' if policy.narrow_on_retry else 'off' }}</span><span class="kpi-label">narrow retry</span></div>
+    <div class="kpi"><span class="kpi-value">{{ 'auto' if policy.template_auto else 'fixed' }}</span><span class="kpi-label">doctrine</span></div>
+  </div>
+  <p class="muted small">Approved by {{ policy.approved_by or '-' }} - {{ policy.approval_statement or 'no statement recorded' }}</p>
+</section>
+
+<div class="grid two">
+  <section class="card">
+    <h2>Authorized targets</h2>
+    <table class="table compact">
+      <thead><tr><th>Target</th><th>Enabled</th><th>Failures</th><th>Next eligible</th></tr></thead>
+      <tbody>
+      {% for target in targets %}
+        <tr>
+          <td class="mono small">{{ target.url }}</td>
+          <td>{{ 'yes' if target.enabled else 'no' }}</td>
+          <td class="mono">{{ target.consecutive_failures }}</td>
+          <td class="muted small">{{ target.next_eligible_at.strftime('%Y-%m-%d %H:%M') if target.next_eligible_at else '-' }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="empty">No targets synced.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  <section class="card">
+    <h2>Recent decisions</h2>
+    <ul class="feed feed-scroll">
+    {% for decision in decisions %}
+      <li>
+        <span class="badge {{ 'done' if decision.action in ('delegate','run','delegate-narrow') else 'blocked' }}">{{ decision.action }}</span>
+        <span class="feed-main">{{ decision.reason[:160] }}</span>
+        <span class="muted small mono">{{ decision.at.strftime('%m-%d %H:%M') if decision.at else '' }}</span>
+      </li>
+    {% else %}
+      <li class="empty">No decisions recorded.</li>
+    {% endfor %}
+    </ul>
+  </section>
+</div>
+{% else %}
+<section class="card empty">Autonomy is not configured for this tenant.</section>
+{% endif %}
+{% endblock %}

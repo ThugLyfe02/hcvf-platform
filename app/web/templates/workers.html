@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Workforce - HCVF Console{% endblock %}
+{% block content %}
+<section class="page-head"><div><h1>Workforce</h1><p class="muted">Nine specialists, one job each. None may accept its own output.</p></div></section>
+<div class="grid three">
+{% for worker in workers %}
+  <section class="card worker-card">
+    <h2 class="mono">{{ worker.name }}</h2>
+    <p class="muted small">{{ worker.description }}</p>
+    <div class="chips">{% for kind in worker.kinds %}<span class="tag">{{ kind }}</span>{% endfor %}</div>
+  </section>
+{% endfor %}
+</div>
+<section class="card">
+  <h2>Doctrines</h2>
+  <table class="table compact">
+    <thead><tr><th>Template</th><th>Seed probes</th></tr></thead>
+    <tbody>
+    {% for template in templates %}
+      <tr><td class="mono">{{ template.name }}</td><td class="muted small">{{ template.probes|join(', ') }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

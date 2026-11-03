@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from app.api.v1 import (
+    admin_router,
     autonomy_router,
     campaign_runs_router,
     catalog_router,
@@ -28,6 +31,7 @@ from app.core.security_headers import SecurityHeadersMiddleware
 from app.core.tracing import TraceContextMiddleware
 from app.db.session import engine
 from app.services.bootstrap import provision_configured_tenants
+from app.web.router import router as console_router
 
 
 @asynccontextmanager
@@ -80,6 +84,13 @@ app.include_router(tenants_router)
 app.include_router(governance_router)
 app.include_router(objectives_router)
 app.include_router(catalog_router)
+app.include_router(admin_router)
+app.include_router(console_router)
+app.mount(
+    "/console/static",
+    StaticFiles(directory=Path(__file__).parent / "web" / "static"),
+    name="console-static",
+)
 
 
 install_error_handlers(app)

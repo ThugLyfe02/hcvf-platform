@@ -26,6 +26,7 @@ _INDEX_HTML = """<!doctype html><html><head><title>Fixture App</title></head><bo
 <h1>Fixture App</h1>
 <a href="/admin">Admin</a>
 <a href="/login">Login</a>
+<script src="/static/app.js"></script>
 <a href="/api/v1/users?page=1">Users API</a>
 <a href="/static/app.css">Styles</a>
 <a href="https://external.example.test/away">External</a>
@@ -74,7 +75,15 @@ class FixtureHandler(BaseHTTPRequestHandler):
         lowered = path.lower()
 
         if lowered in ("/", "/index.html"):
-            self._send(200, _INDEX_HTML.encode(), headers=[*self._base_headers(), *self._cors()])
+            forwarded = self.headers.get("X-Forwarded-Host", "")
+            body = _INDEX_HTML.encode()
+            headers = [*self._base_headers(), *self._cors()]
+            if forwarded:
+                # A realistic cache-trust flaw: the edge reflects whatever host
+                # header it is given into a response it marks as cacheable.
+                body = _INDEX_HTML.replace("</body>", f"<p>canonical host: {forwarded}</p></body>").encode()
+                headers += [("X-Cache", "HIT"), ("Cache-Control", "public, max-age=60")]
+            self._send(200, body, headers=headers)
             return
         if lowered == "/admin":
             self._send(403, b"forbidden", headers=self._cors())
@@ -92,6 +101,27 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 b'{"users": [{"id": 1, "email": "a@example.test"}]}',
                 headers=[("Content-Type", "application/json"), *self._cors()],
             )
+            return
+        if lowered == "/static/app.js":
+            bundle = (
+                b"const API_KEY = 'AKIAIOSFODNN7EXAMPLE';\n"
+                b"function boot(){ return 'fixture'; }\n"
+                b"//# sourceMappingURL=/static/app.js.map\n"
+            )
+            self._send(200, bundle, headers=[("Content-Type", "application/javascript")])
+            return
+        if lowered == "/static/app.js.map":
+            payload = b'{"version":3,"sources":["webpack://fixture/src/index.ts"],"mappings":"AAAA"}'
+            self._send(200, payload, headers=[("Content-Type", "application/json")])
+            return
+        if lowered == "/package.json":
+            manifest = b'{"name":"fixture-app","dependencies":{"express":"4.18.2","lodash":"4.17.21"},"devDependencies":{"jest":"29.0.0"}}'
+            self._send(200, manifest, headers=[("Content-Type", "application/json")])
+            return
+        if lowered == "/reflect":
+            forwarded = self.headers.get("X-Forwarded-Host", "")
+            body = f"<html><title>Reflect</title><p>host={forwarded}</p></html>".encode()
+            self._send(200, body, headers=[("X-Cache", "HIT"), ("Cache-Control", "public, max-age=60")])
             return
         if lowered == "/static/app.css":
             self._send(200, b"body{margin:0}", headers=[("Content-Type", "text/css")])

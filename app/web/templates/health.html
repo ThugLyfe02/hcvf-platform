@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Runtime - HCVF Console{% endblock %}
+{% block content %}
+<section class="page-head"><div><h1>Runtime</h1><p class="muted">What this process can see right now.</p></div></section>
+<section class="card">
+  <div class="grid four">
+    <div class="kpi"><span class="kpi-value">{{ active_objectives }}</span><span class="kpi-label">active objectives</span></div>
+    <div class="kpi"><span class="kpi-value">{{ engine_probes }}</span><span class="kpi-label">registered probes</span></div>
+    <div class="kpi"><span class="kpi-value">{{ tables }}</span><span class="kpi-label">database tables</span></div>
+    <div class="kpi"><span class="kpi-value mono small">{{ now.strftime('%H:%M:%S') }}</span><span class="kpi-label">server time (UTC)</span></div>
+  </div>
+  <p class="muted small">Health endpoints: <a class="link" href="/health">/health</a>, <a class="link" href="/healthz">/healthz</a>, <a class="link" href="/readyz">/readyz</a>, <a class="link" href="/metrics">/metrics</a>.</p>
+</section>
+{% endblock %}

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.engine.probes import artifact as _artifact  # noqa: F401
+
 # Import for side effects: each module registers its probes.
 from app.engine.probes import crypto as _crypto  # noqa: F401
 from app.engine.probes import discovery as _discovery  # noqa: F401
