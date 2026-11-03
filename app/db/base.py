@@ -42,6 +42,7 @@ def import_models() -> None:
     from app.models.evidence import EvidenceBlob, ProbeStat
     from app.models.finding import Finding
     from app.models.governance import FindingSuppression, IdempotencyKey, Webhook
+    from app.models.memory import ObjectiveMemory
     from app.models.objective import Objective, ObjectiveEvent, ObjectiveTask
     from app.models.outbox import Outbox
     from app.models.run import Run
@@ -65,4 +66,5 @@ def import_models() -> None:
         Objective,
         ObjectiveTask,
         ObjectiveEvent,
+        ObjectiveMemory,
     )

@@ -32,6 +32,9 @@ TEMPLATE_PROBES: dict[str, tuple[str, ...]] = {
     "auth": ("jwt-posture", "cors-policy", "cookie-flags"),
     "exposure": ("exposed-config", "openapi-surface", "security-txt"),
     "coverage": ("security-headers", "cookie-flags", "cors-policy", "exposed-config"),
+    # Seed only: after recon the adaptive planner picks by expected
+    # information gain instead of following this list.
+    "adaptive": ("security-headers", "cors-policy", "jwt-posture"),
 }
 
 #: Default acceptance: the work must actually have been performed, with evidence.
@@ -52,6 +55,10 @@ TEMPLATE_CRITERIA: dict[str, tuple[Criterion, ...]] = {
         Criterion(CriterionKind.min_probes, 4, label="at least four probes executed"),
         Criterion(CriterionKind.min_endpoints, 2, label="at least two endpoints discovered"),
         Criterion(CriterionKind.min_route_coverage, 0.5, label="at least half of discovered routes probed"),
+    ),
+    "adaptive": (
+        Criterion(CriterionKind.min_probes, 3, label="at least three probes executed"),
+        Criterion(CriterionKind.min_endpoints, 1, label="surface discovery produced an endpoint"),
     ),
     "custom": (Criterion(CriterionKind.min_probes, 1, label="at least one probe executed"),),
 }

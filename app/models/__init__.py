@@ -5,6 +5,7 @@ from app.models.campaign import Campaign, CampaignStatus
 from app.models.evidence import EvidenceBlob, ProbeStat
 from app.models.finding import Finding, FindingStatus
 from app.models.governance import FindingSuppression, IdempotencyKey, Webhook
+from app.models.memory import ObjectiveMemory
 from app.models.objective import Objective, ObjectiveEvent, ObjectiveTask
 from app.models.outbox import Outbox
 from app.models.run import Run, RunStatus
@@ -25,6 +26,7 @@ __all__ = [
     "IdempotencyKey",
     "Objective",
     "ObjectiveEvent",
+    "ObjectiveMemory",
     "ObjectiveTask",
     "Outbox",
     "ProbeStat",

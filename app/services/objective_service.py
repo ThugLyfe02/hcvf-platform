@@ -24,6 +24,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core import metrics
 from app.core.config import settings
 from app.engine.budget import Budget
 from app.engine.errors import EngineError
@@ -40,6 +41,7 @@ from app.engine.policy import EgressPolicy
 from app.engine.probes import registry
 from app.engine.target import build_grant, parse_target
 from app.engine.types import SafetyClass
+from app.engine.workforce.coverage import normalize_route
 from app.engine.workforce.criteria import parse_criteria
 from app.engine.workforce.decompose import (
     TEMPLATE_CRITERIA,
@@ -48,7 +50,9 @@ from app.engine.workforce.decompose import (
     plan_objective,
     slugify,
 )
+from app.engine.workforce.replan import belief_from_outcomes, plan_adaptive
 from app.engine.workforce.supervisor import Supervisor
+from app.engine.workforce.surface import build_surface
 from app.engine.workforce.types import (
     Criterion,
     FindingLite,
@@ -61,9 +65,10 @@ from app.engine.workforce.types import (
 )
 from app.engine.workforce.workers import TaskObservation, workers_for
 from app.models import Campaign, Objective, ObjectiveEvent, ObjectiveTask, Run, Tenant
-from app.services import risk
+from app.services import memory_service, risk
 from app.services.audit_service import AuditService
 from app.services.campaign_service import CampaignService
+from app.services.objective_artifacts import objective_diff, write_artifacts
 
 LEASE_SECONDS = 300
 MAX_TASKS_PER_TICK = 3
@@ -456,6 +461,7 @@ class ObjectiveService:
             )
 
         task_row.status = task.status.value
+        metrics.OBJECTIVE_TASKS.labels(worker=task_row.worker, status=task_row.status).inc()
         self._event(
             objective,
             f"task.{task.status.value}",
@@ -489,6 +495,12 @@ class ObjectiveService:
             # Discovery is a plan-changing event: grow the objective with the
             # route-specific work the template implied but could not name.
             self._expand_coverage(objective, supervisor, outcome.endpoints)
+            self._expand_adaptive(objective, supervisor, outcome.endpoints, max_new=3)
+
+        elif task.spec.kind in {TaskKind.probe, TaskKind.verify} and outcome.status is TaskStatus.done:
+            # Re-plan after every result: the posterior moved, so the best next
+            # request may be a different probe on a different route.
+            self._expand_adaptive(objective, supervisor, outcome.endpoints, max_new=1)
 
         self.db.commit()
         verdict = supervisor.verdict()
@@ -746,6 +758,119 @@ class ObjectiveService:
             )
         return len(added)
 
+    def _expand_adaptive(
+        self, objective: Objective, supervisor: Supervisor, discovered: tuple[str, ...], *, max_new: int
+    ) -> int:
+        """Add the next best request by expected information gain.
+
+        Called after discovery and after every completed probe, so the plan is a
+        sequence of decisions rather than a fixed script. The cap keeps an
+        adaptive objective from turning into an unbounded crawler.
+        """
+
+        if objective.template != "adaptive":
+            return 0
+        existing = self.tasks(objective.id)
+        adaptive_so_far = [task for task in existing if (task.payload or {}).get("adaptive")]
+        if len(adaptive_so_far) >= 10:
+            return 0
+        budget_left = objective.budget_requests - objective.requests_used
+        max_tasks = min(max_new, 10 - len(adaptive_so_far), budget_left // max(4, objective.per_task_budget))
+        if max_tasks < 1:
+            return 0
+
+        outcomes = [state.outcome for state in supervisor.ordered() if state.outcome is not None]
+        observations = tuple(
+            (
+                normalize_route(outcome.route or objective.target_url),
+                tuple(outcome.probes_run),
+                tuple(finding.kind for finding in outcome.findings),
+                float(outcome.risk),
+            )
+            for outcome in outcomes
+            if outcome.probes_run
+        )
+        graph = build_surface(
+            parse_target(objective.target_url).origin,
+            discovered=discovered,
+            observations=observations,
+        )
+        belief = belief_from_outcomes(outcomes)
+        ceiling = SafetyClass[objective.safety_ceiling]
+        allowed = tuple(probe_id for probe_id, probe_class in registry().items() if probe_class.spec.safety <= ceiling)
+        known = {(normalize_route(task.route), task.probe_id) for task in existing if task.probe_id}
+        memory = memory_service.boosts(
+            self.db,
+            tenant_id=objective.tenant_id,
+            host=memory_service.host_of(objective.target_url),
+            template=objective.template,
+        )
+        start_seq = max((task.seq for task in existing), default=0) + 1
+        recon_key = next((task.key for task in existing if task.kind == TaskKind.recon.value), "")
+        tasks = plan_adaptive(
+            graph=graph,
+            belief=belief,
+            allowed_probes=allowed,
+            known=known,
+            memory=memory,
+            per_task_budget=objective.per_task_budget,
+            max_tasks=max_tasks,
+            start_seq=start_seq,
+            safety=ceiling,
+            recon_key=recon_key,
+        )
+        added = supervisor.add_tasks(tasks)
+        for task in added:
+            self.db.add(
+                ObjectiveTask(
+                    objective_id=objective.id,
+                    tenant_id=objective.tenant_id,
+                    key=task.key,
+                    seq=task.seq,
+                    kind=task.kind.value,
+                    title=task.title,
+                    worker=task.worker,
+                    probe_id=task.probe_id,
+                    route=task.route,
+                    depends_on=list(task.depends_on),
+                    budget_requests=task.budget_requests,
+                    max_attempts=task.max_attempts,
+                    safety=task.safety.name,
+                    verify_kind=task.verify_kind,
+                    payload=dict(task.payload),
+                    status=TaskStatus.pending.value,
+                )
+            )
+            metrics.OBJECTIVE_INFORMATION_GAIN.observe(float(task.payload.get("expected_information_gain", 0.0) or 0.0))
+        if added:
+            self._event(
+                objective,
+                "plan.adaptive",
+                f"Adaptive planner added {len(added)} task(s) by expected information gain.",
+                {
+                    "tasks": [task.to_dict() for task in added],
+                    "belief": belief.to_dict(),
+                    "surface": {"nodes": len(graph.nodes), "unprobed": len(graph.unprobed_routes())},
+                    "memory_boosted": sum(1 for task in added if task.payload.get("adaptive")),
+                },
+            )
+        return len(added)
+
+    def diff(self, objective: Objective) -> dict[str, object]:
+        previous = self.db.scalar(
+            select(Objective)
+            .where(
+                Objective.tenant_id == objective.tenant_id,
+                Objective.target_url == objective.target_url,
+                Objective.id != objective.id,
+                Objective.status == ObjectiveStatus.completed.value,
+                Objective.created_at < objective.created_at,
+            )
+            .order_by(Objective.created_at.desc())
+            .limit(1)
+        )
+        return objective_diff(objective, previous)
+
     def run_to_completion(self, objective: Objective, *, max_tasks: int = 25) -> Verdict:
         verdict = self._supervisor(objective).verdict()
         for _ in range(max_tasks):
@@ -771,6 +896,38 @@ class ObjectiveService:
             {"verdict": verdict.to_dict()},
         )
         self.db.commit()
+
+        evidence = supervisor.evidence()
+        metrics.OBJECTIVES_COMPLETED.labels(template=objective.template, status=verdict.status.value).inc()
+        metrics.OBJECTIVE_COVERAGE.observe(evidence.coverage.ratio())
+        refuted = len(evidence.refuted)
+        if refuted:
+            metrics.VERIFICATION_REFUTED.inc(refuted)
+        try:
+            paths = write_artifacts(objective, self.evidence_root, objective.result)
+            self._event(
+                objective,
+                "objective.artifacts",
+                "Signed SARIF and Markdown reports written.",
+                {"paths": paths},
+            )
+            self.db.commit()
+        except OSError:
+            self.db.rollback()
+
+        try:
+            updated = memory_service.record_objective(self.db, objective, supervisor)
+            if updated:
+                metrics.MEMORY_RECIPES.inc(updated)
+                self._event(
+                    objective,
+                    "memory.updated",
+                    f"Recorded {updated} recipe outcome(s) for this host.",
+                    {"recipes": updated},
+                )
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
         if objective.origin == "autonomy":
             try:
                 from app.services.autonomy_service import AutonomyService

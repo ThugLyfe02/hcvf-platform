@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -12,6 +14,8 @@ from app.db.session import get_db
 from app.engine.workforce.decompose import TEMPLATE_CRITERIA, TEMPLATE_PROBES
 from app.engine.workforce.workers import worker_catalog
 from app.models import Objective, Tenant
+from app.services import memory_service
+from app.services.objective_artifacts import build_markdown, build_sarif, sign
 from app.services.objective_service import ObjectiveError, ObjectiveService
 
 router = APIRouter(prefix="/api/v1/objectives", tags=["objectives"])
@@ -21,7 +25,7 @@ class ObjectiveCreate(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     description: str = Field(default="", max_length=2000)
     target_url: str = Field(min_length=8, max_length=2048)
-    template: str = Field(default="posture", pattern="^(posture|auth|exposure|coverage|custom)$")
+    template: str = Field(default="posture", pattern="^(posture|auth|exposure|coverage|adaptive|custom)$")
     budget_requests: int = Field(default=120, ge=10, le=5000)
     per_task_budget: int = Field(default=20, ge=4, le=500)
     safety_ceiling: str = Field(default="read_only", pattern="^(read_only|state_changing)$")
@@ -277,6 +281,66 @@ def objective_coverage(
     }
 
 
+@router.get("/{objective_id}/report.sarif")
+def objective_sarif(
+    objective_id: UUID,
+    tenant: Tenant = Depends(require_scope("campaigns:read")),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Portable SARIF for this objective, signed with the evidence key."""
+
+    service = ObjectiveService(db)
+    objective = service.get(tenant_id=tenant.id, objective_id=objective_id)
+    if objective is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Objective not found")
+    body = json.dumps(build_sarif(objective), indent=2, sort_keys=True).encode("utf-8")
+    signature = sign(body)
+    return JSONResponse(
+        content=json.loads(body),
+        headers={
+            "X-HCVF-Signature": f"sha256={signature['value']}",
+            "X-HCVF-SHA256": signature["sha256"],
+            "Content-Disposition": f'attachment; filename="{objective.key}.sarif"',
+        },
+    )
+
+
+@router.get("/{objective_id}/report.md")
+def objective_markdown(
+    objective_id: UUID,
+    tenant: Tenant = Depends(require_scope("campaigns:read")),
+    db: Session = Depends(get_db),
+) -> PlainTextResponse:
+    service = ObjectiveService(db)
+    objective = service.get(tenant_id=tenant.id, objective_id=objective_id)
+    if objective is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Objective not found")
+    body = build_markdown(objective).encode("utf-8")
+    signature = sign(body)
+    return PlainTextResponse(
+        content=body.decode("utf-8"),
+        headers={
+            "X-HCVF-Signature": f"sha256={signature['value']}",
+            "X-HCVF-SHA256": signature["sha256"],
+        },
+    )
+
+
+@router.get("/{objective_id}/diff")
+def objective_diff_view(
+    objective_id: UUID,
+    tenant: Tenant = Depends(require_scope("campaigns:read")),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """New, fixed and recurring findings against the previous objective on this target."""
+
+    service = ObjectiveService(db)
+    objective = service.get(tenant_id=tenant.id, objective_id=objective_id)
+    if objective is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Objective not found")
+    return service.diff(objective)
+
+
 # -- static catalogs --------------------------------------------------------
 catalog_router = APIRouter(prefix="/api/v1", tags=["objectives"])
 
@@ -286,6 +350,17 @@ def list_workers(_: Tenant = Depends(require_scope("campaigns:read"))) -> list[d
     """The specialists that can be delegated work."""
 
     return worker_catalog()
+
+
+@catalog_router.get("/memory")
+def memory_recipes(
+    tenant: Tenant = Depends(require_scope("campaigns:read")),
+    db: Session = Depends(get_db),
+    limit: int = Query(default=25, ge=1, le=200),
+) -> list[dict[str, object]]:
+    """What the workforce has learned about this tenant's hosts."""
+
+    return memory_service.recipes(db, tenant_id=tenant.id, limit=limit)
 
 
 @catalog_router.get("/objective-templates")

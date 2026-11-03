@@ -174,7 +174,7 @@ class AutonomyService:
             raise AutonomyError("min_utility must be between 0 and 1")
         if mode not in {"hunt", "objective"}:
             raise AutonomyError("mode must be 'hunt' (schedule campaigns) or 'objective' (delegate work)")
-        if objective_template not in {"posture", "auth", "exposure", "coverage", "custom"}:
+        if objective_template not in {"posture", "auth", "exposure", "coverage", "adaptive", "custom"}:
             raise AutonomyError("unknown objective_template")
         if not 1 <= max_objectives_per_day <= 96:
             raise AutonomyError("max_objectives_per_day must be between 1 and 96")

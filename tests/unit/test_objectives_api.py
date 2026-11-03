@@ -389,6 +389,61 @@ class ObjectiveApiTests(unittest.TestCase):
             self.assertEqual(kinds, {"finding_present"})
             self.assertIn("retry", narrow.title)
 
+    # -- adaptive planning, artifacts, memory ---------------------------
+    def test_adaptive_objective_replans_by_information_gain(self) -> None:
+        objective = self._delegate(template="adaptive", budget=200)
+        report = self._run(objective["id"], max_tasks=40)
+        self.assertEqual(report["verdict"]["status"], "completed", report["verdict"])
+
+        events = self.client.get(f"/api/v1/objectives/{objective['id']}/events", headers=HEADERS).json()
+        adaptive = [event for event in events if event["type"] == "plan.adaptive"]
+        self.assertTrue(adaptive, "adaptive planner never ran")
+        payload = adaptive[0]["payload"]
+        self.assertIn("belief", payload)
+        self.assertIn("posterior", payload["belief"])
+        self.assertGreater(payload["surface"]["nodes"], 0)
+
+        tasks = self._tasks(objective["id"])
+        scored = [task for task in tasks if "-eig-" in task["key"]]
+        self.assertTrue(scored, "no expected-information-gain tasks were planned")
+        self.assertTrue(all(task["kind"] == "probe" for task in scored))
+
+    def test_objective_artifacts_are_signed_and_diffable(self) -> None:
+        first = self._delegate(template="posture", budget=120)
+        self._run(first["id"], max_tasks=25)
+
+        sarif = self.client.get(f"/api/v1/objectives/{first['id']}/report.sarif", headers=HEADERS)
+        self.assertEqual(sarif.status_code, 200, sarif.text)
+        self.assertTrue(sarif.headers["x-hcvf-signature"].startswith("sha256="))
+        self.assertEqual(len(sarif.headers["x-hcvf-sha256"]), 64)
+        body = sarif.json()
+        self.assertEqual(body["version"], "2.1.0")
+        run = body["runs"][0]
+        self.assertEqual(run["properties"]["objective"], first["key"])
+        self.assertIsInstance(run["results"], list)
+
+        markdown = self.client.get(f"/api/v1/objectives/{first['id']}/report.md", headers=HEADERS)
+        self.assertEqual(markdown.status_code, 200)
+        self.assertIn("# Objective report", markdown.text)
+        self.assertIn("Acceptance criteria", markdown.text)
+        self.assertTrue(markdown.headers["x-hcvf-signature"].startswith("sha256="))
+
+        second = self._delegate(template="posture", budget=120)
+        self._run(second["id"], max_tasks=25)
+        diff = self.client.get(f"/api/v1/objectives/{second['id']}/diff", headers=HEADERS)
+        self.assertEqual(diff.status_code, 200, diff.text)
+        payload = diff.json()
+        for key in ("new", "fixed", "recurring", "current_total", "previous_total"):
+            self.assertIn(key, payload)
+        self.assertEqual(payload["previous"], first["key"])
+
+        memory = self.client.get("/api/v1/memory", headers=HEADERS)
+        self.assertEqual(memory.status_code, 200)
+        rows = memory.json()
+        self.assertTrue(rows, "no recipes were learned")
+        self.assertIn("score", rows[0])
+        self.assertIn("probe", rows[0])
+
     # -- autonomy on objectives -----------------------------------------
     def test_autonomy_delegates_an_objective_in_objective_mode(self) -> None:
         policy = self.client.put(
