@@ -25,7 +25,14 @@ class FindingStatus:
 class Finding(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "findings"
 
-    run_id: Mapped[UUID] = mapped_column(GUID(), ForeignKey("runs.id", ondelete="CASCADE"), index=True)
+    #: Null for objective-derived findings; campaign findings keep their run link.
+    run_id: Mapped[UUID | None] = mapped_column(
+        GUID(), ForeignKey("runs.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    #: The objective that most recently observed this finding.
+    objective_id: Mapped[UUID | None] = mapped_column(
+        GUID(), ForeignKey("objectives.id", ondelete="CASCADE"), index=True, nullable=True
+    )
     tenant_id: Mapped[UUID | None] = mapped_column(
         GUID(), ForeignKey("tenants.id", ondelete="CASCADE"), index=True, nullable=True
     )

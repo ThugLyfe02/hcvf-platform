@@ -18,7 +18,38 @@ from sqlalchemy.orm import Session
 
 SETTING = "app.tenant_id"
 
-RLS_TABLES = ("campaigns", "runs", "findings", "audit_logs", "autonomy_policies", "hunt_targets", "webhooks")
+RLS_TABLES = (
+    "campaigns",
+    "runs",
+    "findings",
+    "finding_notes",
+    "audit_logs",
+    "autonomy_policies",
+    "autonomy_decisions",
+    "hunt_targets",
+    "webhooks",
+    "idempotency_keys",
+    "finding_suppressions",
+    "probe_stats",
+    "objectives",
+    "objective_tasks",
+    "objective_events",
+    "objective_memory",
+    "assets",
+)
+
+
+def tenant_scoped_tables() -> list[str]:
+    """Every table carrying a tenant_id column, derived from the metadata.
+
+    Deriving beats a hand-maintained list: a new tenant-scoped table cannot
+    silently ship without a policy.
+    """
+
+    from app.models import Base
+
+    tables = [table.name for table in Base.metadata.sorted_tables if "tenant_id" in table.c]
+    return sorted(tables)
 
 
 def rls_session_sql(tenant_id: str | uuid.UUID) -> str:

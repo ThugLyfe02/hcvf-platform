@@ -91,3 +91,9 @@ jobs:
         run: test "$(alembic heads | wc -l)" -eq 1
       - name: integration tests
         run: pytest tests -q --ignore=tests/unit
+      - name: enable row-level security
+        run: python scripts/enable_rls.py --apply
+      - name: verify RLS tenant isolation
+        env:
+          HCVF_RLS_ENABLED: "true"
+        run: pytest tests/integration -q

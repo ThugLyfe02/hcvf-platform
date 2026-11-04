@@ -112,6 +112,9 @@ class FindingLite:
     confidence: float
     probe_id: str
     route: str
+    title: str = ""
+    cwe: str = ""
+    remediation: str = ""
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -121,6 +124,9 @@ class FindingLite:
             "confidence": self.confidence,
             "probe_id": self.probe_id,
             "route": self.route,
+            "title": self.title,
+            "cwe": self.cwe,
+            "remediation": self.remediation,
         }
 
 

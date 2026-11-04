@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.db.session import get_db
+from app.db.session import bind_tenant, get_db
 from app.models import Tenant
 
 api_key_header = APIKeyHeader(name=settings.api_key_header, auto_error=False)
@@ -47,6 +47,7 @@ def get_current_tenant(
     request.state.tenant_id = str(tenant.id)
     request.state.scopes = list(tenant.scopes or [])
     request.state.actor = f"api-key:{tenant.role}:{tenant.name}"[:120]
+    bind_tenant(db, tenant.id)
     return tenant
 
 

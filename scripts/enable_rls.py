@@ -21,7 +21,7 @@ if str(ROOT) not in sys.path:
 
 from sqlalchemy import text
 
-from app.core.rls import RLS_TABLES, policy_sql
+from app.core.rls import policy_sql, tenant_scoped_tables
 from app.db.session import engine
 
 
@@ -31,7 +31,7 @@ def main() -> int:
     parser.add_argument("--table", action="append", default=None, help="limit to specific tables")
     args = parser.parse_args()
 
-    tables = args.table or list(RLS_TABLES)
+    tables = args.table or tenant_scoped_tables()
     statements: list[str] = []
     for table in tables:
         statements.extend(policy_sql(table))

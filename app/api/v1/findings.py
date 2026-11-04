@@ -18,7 +18,8 @@ router = APIRouter(prefix="/api/v1/findings", tags=["findings"])
 
 class FindingResponse(BaseModel):
     id: UUID
-    run_id: UUID
+    run_id: UUID | None
+    objective_id: UUID | None = None
     fingerprint: str
     probe_id: str
     kind: str
@@ -56,6 +57,7 @@ def _to_response(finding: Finding) -> FindingResponse:
     return FindingResponse(
         id=finding.id,
         run_id=finding.run_id,
+        objective_id=finding.objective_id,
         fingerprint=finding.fingerprint,
         probe_id=finding.probe_id,
         kind=finding.kind,
@@ -85,6 +87,7 @@ def list_findings(
     finding_status: str | None = Query(default=None, alias="status"),
     kind: str | None = None,
     campaign_id: UUID | None = None,
+    objective_id: UUID | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> FindingPage:
@@ -97,6 +100,8 @@ def list_findings(
         conditions.append(Finding.kind == kind)
     if campaign_id is not None:
         conditions.append(Finding.run_id.in_(select(Run.id).where(Run.campaign_id == campaign_id)))
+    if objective_id is not None:
+        conditions.append(Finding.objective_id == objective_id)
 
     total = db.scalar(select(func.count()).select_from(Finding).where(*conditions)) or 0
     rows = list(

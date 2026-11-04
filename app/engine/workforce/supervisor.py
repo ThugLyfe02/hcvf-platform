@@ -93,6 +93,9 @@ def outcome_from_row(row: dict) -> TaskOutcome | None:
             confidence=float(item.get("confidence", 0.0) or 0.0),
             probe_id=str(item.get("probe_id", "")),
             route=str(item.get("route", "")),
+            title=str(item.get("title", "")),
+            cwe=str(item.get("cwe", "")),
+            remediation=str(item.get("remediation", "")),
         )
         for item in payload.get("findings", [])
         if isinstance(item, dict)

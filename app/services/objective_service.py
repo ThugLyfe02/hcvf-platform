@@ -21,7 +21,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.core import metrics
@@ -51,7 +51,7 @@ from app.engine.workforce.decompose import (
     slugify,
 )
 from app.engine.workforce.replan import belief_from_outcomes, plan_adaptive
-from app.engine.workforce.supervisor import Supervisor
+from app.engine.workforce.supervisor import Supervisor, TaskState
 from app.engine.workforce.surface import build_surface
 from app.engine.workforce.types import (
     Criterion,
@@ -65,7 +65,7 @@ from app.engine.workforce.types import (
 )
 from app.engine.workforce.workers import TaskObservation, workers_for
 from app.models import Campaign, Objective, ObjectiveEvent, ObjectiveTask, Run, Tenant
-from app.services import asset_service, memory_service, risk
+from app.services import asset_service, findings_ingest, memory_service, risk
 from app.services.audit_service import AuditService
 from app.services.campaign_service import CampaignService
 from app.services.objective_artifacts import objective_diff, write_artifacts
@@ -365,6 +365,53 @@ class ObjectiveService:
         )
 
     # -- execution -------------------------------------------------------
+    def _claim_next(self, objective: Objective) -> tuple[Supervisor, TaskState, ObjectiveTask] | None:
+        """Atomically take the next ready task.
+
+        Two workers, or two ticks in the same second, must never execute the same
+        task. The candidate is chosen from a supervisor snapshot, but the claim
+        is a conditional UPDATE: only the statement that changes the row from
+        pending/ready to running wins. The loser re-reads and tries the next
+        candidate instead of reporting a phantom success.
+        """
+
+        for _ in range(4):
+            supervisor = self._supervisor(objective)
+            state = supervisor.next_task()
+            if state is None:
+                return None
+            row = self.db.scalar(
+                select(ObjectiveTask).where(
+                    ObjectiveTask.objective_id == objective.id,
+                    ObjectiveTask.key == state.spec.key,
+                )
+            )
+            if row is None:
+                continue
+            now = datetime.now(UTC)
+            result = self.db.execute(
+                update(ObjectiveTask)
+                .where(
+                    ObjectiveTask.id == row.id,
+                    ObjectiveTask.status.in_([TaskStatus.pending.value, TaskStatus.ready.value]),
+                )
+                .values(
+                    status=TaskStatus.running.value,
+                    attempts=ObjectiveTask.attempts + 1,
+                    started_at=func.coalesce(ObjectiveTask.started_at, now),
+                    lease_expires_at=now + timedelta(seconds=LEASE_SECONDS),
+                )
+            )
+            self.db.commit()
+            if result.rowcount != 1:
+                continue
+            self.db.refresh(row)
+            # Align the in-memory snapshot with what the database now holds.
+            state.status = TaskStatus.running
+            state.attempts = row.attempts
+            return supervisor, state, row
+        return None
+
     def run_step(self, objective: Objective) -> StepResult:
         if objective.status in {
             ObjectiveStatus.completed.value,
@@ -384,18 +431,14 @@ class ObjectiveService:
             supervisor = self._supervisor(objective)
             return StepResult(objective.id, "", objective.status, supervisor.verdict(), objective.requests_used)
 
-        supervisor = self._supervisor(objective)
-        task_state = supervisor.next_task()
-        if task_state is None:
-            return self._finalise(objective, supervisor)
-
-        task_row = self.db.scalar(
-            select(ObjectiveTask).where(
-                ObjectiveTask.objective_id == objective.id, ObjectiveTask.key == task_state.spec.key
-            )
-        )
-        if task_row is None:
-            raise ObjectiveError(f"task {task_state.spec.key} disappeared")
+        claimed = self._claim_next(objective)
+        if claimed is None:
+            supervisor = self._supervisor(objective)
+            if supervisor.next_task() is None:
+                return self._finalise(objective, supervisor)
+            # Every ready task was claimed by another worker a moment ago.
+            return StepResult(objective.id, "", TaskStatus.running.value, supervisor.verdict(), objective.requests_used)
+        supervisor, task, task_row = claimed
 
         if objective.status == ObjectiveStatus.queued.value:
             objective.status = ObjectiveStatus.running.value
@@ -409,15 +452,8 @@ class ObjectiveService:
             self.db.commit()
             return self._finalise(objective, self._supervisor(objective))
 
-        task_row.status = TaskStatus.running.value
-        task_row.attempts += 1
-        task_row.started_at = task_row.started_at or datetime.now(UTC)
-        task_row.lease_expires_at = datetime.now(UTC) + timedelta(seconds=LEASE_SECONDS)
         objective.status = ObjectiveStatus.running.value
         self.db.commit()
-
-        task = supervisor.get(task_state.spec.key)
-        task.attempts = task_row.attempts
 
         worker = workers_for(task.spec)
         request = worker.plan(task.spec)
@@ -548,6 +584,9 @@ class ObjectiveService:
                 confidence=finding.confidence,
                 probe_id=finding.probe_id,
                 route=finding.location or request.target_url,
+                title=finding.title,
+                cwe=finding.cwe,
+                remediation=finding.remediation,
             )
             for finding in result.findings
         )
@@ -913,6 +952,19 @@ class ObjectiveService:
             )
             self.db.commit()
         except OSError:
+            self.db.rollback()
+
+        try:
+            ingested = findings_ingest.record_objective(self.db, objective, supervisor)
+            self._event(
+                objective,
+                "findings.persisted",
+                f"Findings ledger updated: {ingested.created} new, {ingested.updated} observed again, "
+                f"{ingested.reopened} reopened.",
+                ingested.to_dict(),
+            )
+            self.db.commit()
+        except Exception:
             self.db.rollback()
 
         try:

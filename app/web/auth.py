@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.security import hash_api_key
-from app.db.session import get_db
+from app.db.session import bind_tenant, get_db
 from app.models import Tenant
 
 COOKIE_NAME = "hcvf_console"
@@ -82,6 +82,7 @@ def current_tenant(request: Request, db: Session = Depends(get_db)) -> Tenant:
     if tenant_id is not None:
         tenant = db.get(Tenant, tenant_id)
         if tenant is not None and tenant.is_active:
+            bind_tenant(db, tenant.id)
             request.state.console_tenant = tenant
             return tenant
     target = request.url.path

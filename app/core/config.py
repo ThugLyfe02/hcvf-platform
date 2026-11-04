@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     evidence_dir: str = "evidence"
     #: HMAC key for console session cookies. Set HCVF_CONSOLE_SECRET in production.
     console_secret: str = ""
+    #: Objective worker pool size and per-batch task cap.
+    objective_workers: int = 4
+    objective_tasks_per_batch: int = 8
+    #: Enforce PostgreSQL row-level security; bind app.tenant_id per request.
+    rls_enabled: bool = False
     evidence_key: str = ""
     #: Development only: permit the engine to reach private/loopback addresses.
     allow_private_targets: bool = False
