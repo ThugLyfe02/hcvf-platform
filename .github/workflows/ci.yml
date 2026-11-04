@@ -93,6 +93,8 @@ jobs:
         run: pytest tests -q --ignore=tests/unit
       - name: enable row-level security
         run: python scripts/enable_rls.py --apply
+      - name: create non-superuser role for the RLS gate
+        run: python scripts/rls_ci_setup.py
       - name: verify RLS tenant isolation
         env:
           HCVF_RLS_ENABLED: "true"
