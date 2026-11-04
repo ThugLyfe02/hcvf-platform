@@ -2,6 +2,35 @@
 
 All notable changes are recorded here. The project follows semantic versioning.
 
+## [0.12.0] - 2026-11-04
+
+### Added
+
+- **Objective findings in the ledger** (migration 0013): `findings.objective_id`,
+  nullable `run_id`, full title/cwe/remediation carried from the engine, evidence
+  pointer to the task manifest. Aggregation by `(tenant, fingerprint)` matches
+  the campaign path: recurrence increments occurrences and reopens fixed rows.
+  `GET /findings?objective_id=...` filters the source.
+- **Atomic task claims**: `_claim_next` uses a conditional UPDATE (`status IN
+  ('pending','ready')` -> running) so two workers cannot execute the same task;
+  the loser re-plans instead of reporting phantom progress.
+- **Parallel objective pool** (`app/services/objective_pool.py`): per-thread
+  sessions, bounded workers, per-objective error isolation; wire into the
+  objective worker with `HCVF_OBJECTIVE_WORKERS` and
+  `HCVF_OBJECTIVE_TASKS_PER_BATCH`.
+- **Enforceable RLS**: policies derived from schema metadata (every table with a
+  tenant_id), `bind_tenant` plus an `after_begin` listener that re-applies
+  `set_config` per transaction, `HCVF_RLS_ENABLED`, and a CI step that enables
+  policies and proves cross-tenant isolation plus unbound-connection emptiness.
+- Console/README/docs updates: `docs/CONCURRENCY.md`, RLS section, triage
+  objective-source section.
+
+### Fixed
+
+- Objective findings were invisible to triage, SLA and the findings API; they are
+  now first-class.
+- `findings.run_id` required a run row, forcing objective findings to be dropped.
+
 ## [0.11.0] - 2026-11-03
 
 ### Added

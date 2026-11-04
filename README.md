@@ -238,6 +238,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`SECURITY.md`](SECURITY.md).
 | `GET /api/v1/objectives/{id}/report.sarif` / `report.md` | signed, portable objective reports |
 | `GET /api/v1/objectives/{id}/diff` | new / fixed / recurring findings vs the previous objective |
 | `GET /api/v1/memory` | learned probe/route recipes per host |
+| `GET /api/v1/findings?objective_id=...` | objective-derived findings |
 | `GET /api/v1/findings/summary` | SLA, aging and overdue findings |
 | `PATCH /api/v1/findings/{id}`, `GET/POST .../notes` | validated triage with decision history |
 | `GET /api/v1/assets`, `/changes`, `/summary` | observed surface inventory and change feed |

@@ -54,11 +54,19 @@ sync would find triage in the audit export even if a webhook were lost.
 in the summary's overdue list so an operator can route work, and it is recorded
 on every triage event.
 
-## Known limit
+## Objective findings
 
-Findings discovered by objectives are currently visible in the objective report
-and evidence, not inserted into the findings table; campaign runs own that
-pipeline. The triage workflow therefore applies to campaign-derived findings
-today. Wiring objective findings into the same table (with a nullable run
-reference or a synthetic run row) is the next step and is deliberately not
-claimed as done here.
+Objectives now persist their findings into the same ledger as campaigns
+(migration `0013_objective_findings`):
+
+- `findings.objective_id` links the row to the objective that last observed it;
+  `run_id` is nullable, so one table holds both sources without a fake run row;
+- identity is `(tenant, fingerprint)`, exactly like the campaign path: a second
+  objective that sees the same issue increments `occurrences` and reopens a
+  fixed finding instead of duplicating it;
+- triage finds them through the same endpoints, the same SLA summary and the
+  same console pages; `GET /findings?objective_id=...` filters the source;
+- the row carries `evidence_refs` pointing at the objective and task manifest;
+  the raw response stays sealed in the Merkle evidence.
+
+This removes the previous limitation: triage applies uniformly to both sources.
