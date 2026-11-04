@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Runs - HCVF Console{% endblock %}
+{% block content %}
+<section class="page-head"><div><h1>Runs</h1><p class="muted">Campaign executions with risk score and evidence root.</p></div></section>
+<section class="card">
+<table class="table">
+  <thead><tr><th>Run</th><th>Campaign</th><th>Status</th><th>Risk</th><th>Evidence</th><th>Completed</th></tr></thead>
+  <tbody>
+  {% for row in page.items %}
+    <tr>
+      <td class="mono small">{{ row.run.id }}</td>
+      <td>{{ row.campaign.name }}<div class="muted small">{{ row.campaign.target_url }}</div></td>
+      <td><span class="badge {{ row.run.status }}">{{ row.run.status }}</span></td>
+      <td class="mono">{{ row.run.risk_score if row.run.risk_score is not none else '-' }}</td>
+      <td class="mono small muted">{{ row.run.evidence_root or '-' }}</td>
+      <td class="muted small">{{ row.run.completed_at.strftime('%Y-%m-%d %H:%M') if row.run.completed_at else '' }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="empty">No runs yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</section>
+<nav class="pager">
+  {% if page.has_prev %}<a class="btn ghost" href="{{ request.url.include_query_params(offset=page.offset - page.limit) }}">previous</a>{% endif %}
+  {% if page.has_next %}<a class="btn ghost" href="{{ request.url.include_query_params(offset=page.offset + page.limit) }}">next</a>{% endif %}
+</nav>
+{% endblock %}

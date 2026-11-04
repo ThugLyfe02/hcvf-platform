@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Memory - HCVF Console{% endblock %}
+{% block content %}
+<section class="page-head"><div><h1>Memory</h1><p class="muted">Recipes the workforce learned on this tenant's hosts.</p></div></section>
+<section class="card">
+<table class="table">
+  <thead><tr><th>Host</th><th>Template</th><th>Probe</th><th>Role</th><th>Attempts</th><th>Findings</th><th>Verified</th><th>Refuted</th><th>Score</th></tr></thead>
+  <tbody>
+  {% for recipe in recipes %}
+    <tr>
+      <td class="mono small">{{ recipe.host }}</td>
+      <td><span class="tag">{{ recipe.template }}</span></td>
+      <td class="mono">{{ recipe.probe }}</td>
+      <td class="muted">{{ recipe.role }}</td>
+      <td class="mono">{{ recipe.attempts }}</td>
+      <td class="mono">{{ recipe.findings }}</td>
+      <td class="mono">{{ recipe.verified }}</td>
+      <td class="mono">{{ recipe.refuted }}</td>
+      <td><span class="score">{{ recipe.score }}</span></td>
+    </tr>
+  {% else %}
+    <tr><td colspan="9" class="empty">No recipes yet; complete an objective to learn one.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</section>
+{% endblock %}

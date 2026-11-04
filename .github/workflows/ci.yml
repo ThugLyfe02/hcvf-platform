@@ -1,0 +1,101 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint and migration graph
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install ruff==0.17.3
+      - name: ruff
+        run: ruff check .
+      - name: ruff format check
+        run: ruff format --check .
+      - name: alembic revision graph
+        run: python scripts/check_alembic_graph.py
+      - name: python syntax
+        run: python -m compileall -q app worker scripts
+
+  unit:
+    name: unit suite (no services)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements-dev.txt coverage
+      - name: import smoke (catches the "scheduler imports a missing symbol" class of bug)
+        env:
+          DATABASE_URL: sqlite:///./ci.db
+          RATE_LIMIT_ENABLED: "false"
+        run: |
+          python -c "import app.main, worker.scheduler, worker.tasks, worker.pipeline, app.db.init_db; print('imports ok')"
+      - name: pytest
+        env:
+          RATE_LIMIT_ENABLED: "false"
+        run: coverage run -m pytest tests/unit -q
+      - name: coverage
+        run: coverage report
+
+  integration:
+    name: integration suite (postgres + redis)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: hcvf
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: hcvf
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U hcvf -d hcvf"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://hcvf:password@localhost:5432/hcvf
+      REDIS_URL: redis://localhost:6379/0
+      CELERY_BROKER_URL: redis://localhost:6379/1
+      ENVIRONMENT: development
+      HCVF_API_KEYS: dev-hcvf-key
+      EVIDENCE_DIR: ./evidence
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: migrate from scratch (validates the whole alembic chain)
+        run: alembic upgrade head
+      - name: single head
+        run: test "$(alembic heads | wc -l)" -eq 1
+      - name: integration tests
+        run: pytest tests -q --ignore=tests/unit
+      - name: enable row-level security
+        run: python scripts/enable_rls.py --apply
+      - name: create non-superuser role for the RLS gate
+        run: python scripts/rls_ci_setup.py
+      - name: verify RLS tenant isolation
+        env:
+          HCVF_RLS_ENABLED: "true"
+        run: pytest tests/integration -q

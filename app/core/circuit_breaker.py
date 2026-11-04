@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
 from enum import Enum
-from typing import Callable, TypeVar
+from typing import TypeVar
 
 T = TypeVar("T")
 
@@ -32,9 +33,12 @@ class CircuitBreaker:
         self._lock = threading.RLock()
 
     def _current_state(self) -> CircuitState:
-        if self._state == CircuitState.open and self._opened_at is not None:
-            if time.monotonic() - self._opened_at >= self.recovery_timeout:
-                self._state = CircuitState.half_open
+        if (
+            self._state == CircuitState.open
+            and self._opened_at is not None
+            and time.monotonic() - self._opened_at >= self.recovery_timeout
+        ):
+            self._state = CircuitState.half_open
         return self._state
 
     @property

@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Overview - HCVF Console{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>Overview</h1>
+    <p class="muted">Tenant <strong>{{ tenant.name }}</strong> - workloads, findings and controller state.</p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="/console/objectives">Objectives</a>
+    <a class="btn ghost" href="/console/health">Runtime</a>
+  </div>
+</section>
+
+<div class="kpis">
+  <div class="kpi"><span class="kpi-value">{{ total_objectives }}</span><span class="kpi-label">objectives</span></div>
+  <div class="kpi"><span class="kpi-value">{{ completion_rate }}%</span><span class="kpi-label">completion rate</span></div>
+  <div class="kpi"><span class="kpi-value">{{ high_severity }}</span><span class="kpi-label">high + critical findings</span></div>
+  <div class="kpi"><span class="kpi-value">{{ overdue_count }}</span><span class="kpi-label">findings past SLA</span></div>
+  <div class="kpi"><span class="kpi-value">{{ campaigns }}</span><span class="kpi-label">campaigns</span></div>
+  <div class="kpi"><span class="kpi-value">{{ policy.enabled if policy else 'off' }}</span><span class="kpi-label">autonomy</span></div>
+</div>
+
+<div class="grid two">
+  <section class="card">
+    <div class="card-head"><h2>Recent objectives</h2><a class="link" href="/console/objectives">all</a></div>
+    <table class="table">
+      <thead><tr><th>Objective</th><th>Template</th><th>Status</th><th>Requests</th></tr></thead>
+      <tbody>
+      {% for objective in recent_objectives %}
+        <tr>
+          <td><a href="/console/objectives/{{ objective.id }}">{{ objective.key }}</a><div class="muted small">{{ objective.target_url }}</div></td>
+          <td><span class="tag">{{ objective.template }}</span></td>
+          <td><span class="badge {{ objective.status }}">{{ objective.status }}</span></td>
+          <td class="mono">{{ objective.requests_used }}/{{ objective.budget_requests }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="empty">No objectives yet. Delegate one through the API.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h2>Latest findings</h2><a class="link" href="/console/findings">all</a></div>
+    <ul class="feed">
+      {% for finding in recent_findings %}
+        <li>
+          <span class="badge {{ finding.severity }}">{{ finding.severity }}</span>
+          <span class="feed-main">{{ finding.title }}</span>
+          <span class="muted small mono">{{ finding.kind }}</span>
+        </li>
+      {% else %}
+        <li class="empty">No findings recorded.</li>
+      {% endfor %}
+    </ul>
+  </section>
+</div>
+
+<div class="grid two">
+  <section class="card">
+    <h2>Workforce</h2>
+    <div class="chips">
+      {% for worker in workers %}<span class="tag" title="{{ worker.description }}">{{ worker.name }}</span>{% endfor %}
+    </div>
+  </section>
+  <section class="card">
+    <h2>Doctrines</h2>
+    <table class="table compact">
+      <thead><tr><th>Template</th><th>Probes</th></tr></thead>
+      <tbody>
+      {% for template in templates %}
+        <tr><td class="mono">{{ template.name }}</td><td class="muted">{{ template.probe_count }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+{% endblock %}

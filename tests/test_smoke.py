@@ -29,5 +29,8 @@ def test_api_root_is_reachable() -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload == {"service": "hcvf", "status": "ok"}
+    assert payload["service"] == "hcvf"
+    assert payload["status"] == "ok"
+    assert payload["engine"] == "agentic"
+    assert payload["version"]
     assert response.headers.get("x-request-id")

@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Objectives - HCVF Console{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div><h1>Objectives</h1><p class="muted">Delegated work with observable acceptance criteria.</p></div>
+</section>
+<form class="filters" method="get" action="/console/objectives">
+  <input name="q" value="{{ query }}" placeholder="search key, title or target">
+  <select name="status">
+    <option value="">any status</option>
+    {% for value in ['queued','running','completed','blocked','failed','cancelled'] %}
+      <option value="{{ value }}" {% if status_filter == value %}selected{% endif %}>{{ value }}</option>
+    {% endfor %}
+  </select>
+  <button class="btn" type="submit">Filter</button>
+  <span class="muted small">{{ page.total }} result(s)</span>
+</form>
+
+<section class="card">
+<table class="table">
+  <thead><tr><th>Objective</th><th>Target</th><th>Template</th><th>Status</th><th>Verdict</th><th>Requests</th><th>Created</th></tr></thead>
+  <tbody>
+  {% for objective in page.items %}
+    <tr>
+      <td><a href="/console/objectives/{{ objective.id }}">{{ objective.title }}</a><div class="muted small mono">{{ objective.key }}</div></td>
+      <td class="muted small">{{ objective.target_url }}</td>
+      <td><span class="tag">{{ objective.template }}</span></td>
+      <td><span class="badge {{ objective.status }}">{{ objective.status }}</span></td>
+      <td class="small">{{ objective.verdict[:110] }}{% if objective.verdict|length > 110 %}...{% endif %}</td>
+      <td class="mono small">{{ objective.requests_used }}/{{ objective.budget_requests }}</td>
+      <td class="muted small">{{ objective.created_at.strftime('%Y-%m-%d %H:%M') if objective.created_at else '' }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="7" class="empty">No objectives match.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</section>
+
+<nav class="pager">
+  {% if page.has_prev %}<a class="btn ghost" href="{{ request.url.include_query_params(offset=page.offset - page.limit) }}">previous</a>{% endif %}
+  {% if page.has_next %}<a class="btn ghost" href="{{ request.url.include_query_params(offset=page.offset + page.limit) }}">next</a>{% endif %}
+</nav>
+{% endblock %}

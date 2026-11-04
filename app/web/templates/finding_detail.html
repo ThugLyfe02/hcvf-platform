@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}{{ finding.title }} - HCVF Console{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <div class="muted small mono">{{ finding.kind }}{% if finding.cwe %} - {{ finding.cwe }}{% endif %}</div>
+    <h1>{{ finding.title }}</h1>
+    <p class="muted">Severity <span class="badge {{ finding.severity }}">{{ finding.severity }}</span>
+      status <span class="badge {{ finding.status }}">{{ finding.status }}</span>
+      confidence {{ '%.2f' % finding.confidence }} - {{ finding.occurrences }} occurrence(s)</p>
+  </div>
+  <div class="actions">
+    <a class="btn ghost" href="/console/findings">Back</a>
+  </div>
+</section>
+
+<div class="grid two">
+  <section class="card">
+    <h2>Triage</h2>
+    <form method="post" action="/console/findings/{{ finding.id }}/triage" class="triage-form">
+      <label for="status">Status</label>
+      <select id="status" name="status">
+        {% for value in statuses %}
+          <option value="{{ value }}" {% if value == finding.status %}selected{% endif %}>{{ value }}</option>
+        {% endfor %}
+      </select>
+      <label for="assignee">Assignee</label>
+      <input id="assignee" name="assignee" value="{{ finding.assignee }}" placeholder="owner">
+      <label for="note">Note</label>
+      <textarea id="note" name="note" rows="3" placeholder="why this decision"></textarea>
+      <button class="btn primary" type="submit">Record decision</button>
+    </form>
+    <p class="muted small">Allowed next states: {{ transitions|join(', ') or 'terminal' }}. Every decision is appended to the audit chain and the note log.</p>
+  </section>
+
+  <section class="card">
+    <h2>SLA and evidence</h2>
+    <div class="kpis tight">
+      <div class="kpi"><span class="kpi-value">{{ sla_hours.get(finding.severity, '-') }}h</span><span class="kpi-label">target window</span></div>
+      <div class="kpi"><span class="kpi-value mono small">{{ finding.sla_due_at.strftime('%Y-%m-%d %H:%M') if finding.sla_due_at else '-' }}</span><span class="kpi-label">due</span></div>
+      <div class="kpi"><span class="kpi-value mono small">{{ finding.triaged_by or '-' }}</span><span class="kpi-label">decided by</span></div>
+    </div>
+    <p class="muted small mono">{{ finding.detail[:600] }}</p>
+    <p class="muted small">{{ finding.remediation[:400] }}</p>
+    <p class="muted small mono">fingerprint {{ finding.fingerprint[:24] }}</p>
+  </section>
+</div>
+
+<section class="card">
+  <h2>Decision history</h2>
+  <ul class="feed feed-scroll">
+  {% for note in notes %}
+    <li>
+      <span class="mono small">{{ note.at.strftime('%Y-%m-%d %H:%M') }}</span>
+      <span class="feed-main">{% if note.note %}{{ note.note }}{% else %}(status change){% endif %}</span>
+      <span class="muted small mono">{{ note.status_from }} -> {{ note.status_to }} by {{ note.author or 'system' }}</span>
+    </li>
+  {% else %}
+    <li class="empty">No decisions recorded yet.</li>
+  {% endfor %}
+  </ul>
+</section>
+{% endblock %}

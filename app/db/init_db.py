@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from alembic import command
 from alembic.config import Config
 
+from alembic import command
 from app.services.bootstrap import provision_configured_tenants
 
 

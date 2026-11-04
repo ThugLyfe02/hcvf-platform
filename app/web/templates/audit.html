@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Audit - HCVF Console{% endblock %}
+{% block content %}
+<section class="page-head"><div><h1>Audit</h1><p class="muted">Hash-chained tenant log. Sequence and previous hash are part of each record.</p></div></section>
+<section class="card">
+<table class="table">
+  <thead><tr><th>Seq</th><th>Action</th><th>Actor</th><th>Resource</th><th>Hash</th></tr></thead>
+  <tbody>
+  {% for entry in page.items %}
+    <tr>
+      <td class="mono">{{ entry.seq }}</td>
+      <td class="mono small">{{ entry.action }}</td>
+      <td class="muted small">{{ entry.user_id or entry.actor or '-' }}</td>
+      <td class="muted small">{{ entry.resource_type or '-' }} {{ entry.resource_id or '' }}</td>
+      <td class="mono small muted">{{ (entry.hash or '')[:16] }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5" class="empty">No audit entries.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</section>
+<nav class="pager">
+  {% if page.has_prev %}<a class="btn ghost" href="{{ request.url.include_query_params(offset=page.offset - page.limit) }}">previous</a>{% endif %}
+  {% if page.has_next %}<a class="btn ghost" href="{{ request.url.include_query_params(offset=page.offset + page.limit) }}">next</a>{% endif %}
+</nav>
+{% endblock %}

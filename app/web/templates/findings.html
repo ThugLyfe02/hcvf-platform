@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Findings - HCVF Console{% endblock %}
+{% block content %}
+<section class="page-head"><div><h1>Findings</h1><p class="muted">Fingerprinted, tenant-scoped, evidence-linked.</p></div></section>
+<form class="filters" method="get" action="/console/findings">
+  <input name="q" value="{{ query }}" placeholder="search title or kind">
+  <select name="severity">
+    <option value="">any severity</option>
+    {% for value in ['critical','high','medium','low','info'] %}
+      <option value="{{ value }}" {% if severity == value %}selected{% endif %}>{{ value }}</option>
+    {% endfor %}
+  </select>
+  <select name="status">
+    <option value="">any status</option>
+    {% for value in ['open','triaged','confirmed','false_positive','risk_accepted','fixed','verified'] %}
+      <option value="{{ value }}" {% if status_filter == value %}selected{% endif %}>{{ value }}</option>
+    {% endfor %}
+  </select>
+  <button class="btn" type="submit">Filter</button>
+  <span class="muted small">{{ page.total }} result(s)</span>
+</form>
+<section class="card">
+<table class="table">
+  <thead><tr><th>Severity</th><th>Finding</th><th>Kind</th><th>Status</th><th>Seen</th><th>Occurrences</th></tr></thead>
+  <tbody>
+  {% for finding in page.items %}
+    <tr>
+      <td><span class="badge {{ finding.severity }}">{{ finding.severity }}</span></td>
+      <td><a href="/console/findings/{{ finding.id }}">{{ finding.title }}</a>{% if finding.cwe %}<div class="muted small mono">{{ finding.cwe }}</div>{% endif %}</td>
+      <td class="mono small">{{ finding.kind }}</td>
+      <td><span class="badge {{ finding.status }}">{{ finding.status }}</span></td>
+      <td class="muted small">{{ finding.last_seen_at.strftime('%Y-%m-%d %H:%M') if finding.last_seen_at else '' }}</td>
+      <td class="mono">{{ finding.occurrences }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="empty">No findings match.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</section>
+<nav class="pager">
+  {% if page.has_prev %}<a class="btn ghost" href="{{ request.url.include_query_params(offset=page.offset - page.limit) }}">previous</a>{% endif %}
+  {% if page.has_next %}<a class="btn ghost" href="{{ request.url.include_query_params(offset=page.offset + page.limit) }}">next</a>{% endif %}
+</nav>
+{% endblock %}

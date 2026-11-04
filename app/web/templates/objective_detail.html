@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}{{ objective.key }} - HCVF Console{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <div class="muted small mono">{{ objective.key }}</div>
+    <h1>{{ objective.title }}</h1>
+    <p class="muted">{{ objective.target_url }} - <span class="tag">{{ objective.template }}</span> - priority {{ objective.priority }}</p>
+  </div>
+  <div class="actions">
+    <span class="badge {{ objective.status }}">{{ objective.status }}</span>
+    {% if not terminal %}
+      <form method="post" action="/console/objectives/{{ objective.id }}/run"><button class="btn primary">Run next steps</button></form>
+      <form method="post" action="/console/objectives/{{ objective.id }}/cancel"><button class="btn danger">Cancel</button></form>
+    {% endif %}
+    <a class="btn ghost" href="/api/v1/objectives/{{ objective.id }}/report.sarif">SARIF</a>
+    <a class="btn ghost" href="/api/v1/objectives/{{ objective.id }}/report.md">Markdown</a>
+  </div>
+</section>
+
+<section class="card verdict">
+  <h2>Verdict</h2>
+  <p class="mono small">{{ objective.verdict or 'not decided yet' }}</p>
+  <div class="kpis tight">
+    <div class="kpi"><span class="kpi-value">{{ evidence.findings if evidence else 0 }}</span><span class="kpi-label">findings</span></div>
+    <div class="kpi"><span class="kpi-value">{{ evidence.verified if evidence else 0 }}</span><span class="kpi-label">verified</span></div>
+    <div class="kpi"><span class="kpi-value">{{ evidence.refuted if evidence else 0 }}</span><span class="kpi-label">refuted</span></div>
+    <div class="kpi"><span class="kpi-value">{{ (coverage.ratio * 100) | round(0) }}%</span><span class="kpi-label">coverage</span></div>
+    <div class="kpi"><span class="kpi-value">{{ objective.requests_used }}/{{ objective.budget_requests }}</span><span class="kpi-label">requests</span></div>
+  </div>
+  <div class="progress"><div class="progress-fill" style="width: {{ (coverage.ratio * 100) | round(1) }}%"></div></div>
+</section>
+
+<div class="grid two">
+  <section class="card">
+    <h2>Acceptance criteria</h2>
+    <table class="table compact">
+      <thead><tr><th>Criterion</th><th>Result</th><th>Observed</th></tr></thead>
+      <tbody>
+      {% for item in criteria %}
+        <tr>
+          <td>{{ item.description }}</td>
+          <td>{% if item.satisfied %}<span class="badge done">pass</span>{% else %}<span class="badge blocked">fail</span>{% endif %}</td>
+          <td class="muted small">{{ item.observed }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="3" class="empty">No criteria.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <p class="muted small">{{ verify_tasks|length }} independent verification task(s), {{ adaptive_tasks|length }} adaptive selection(s).</p>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h2>Live events</h2><span class="live-dot" id="live-dot"></span></div>
+    <ul class="feed feed-scroll" id="event-feed"
+        data-sse="/console/objectives/{{ objective.id }}/events.sse">
+      {% for event in events %}
+        <li data-event-id="{{ event.id }}" class="{{ event.type.split('.')[0] }}">
+          <span class="mono small">{{ event.at.strftime('%H:%M:%S') if event.at else '' }}</span>
+          <span class="feed-main">{{ event.message }}</span>
+          <span class="muted small mono">{{ event.type }}</span>
+        </li>
+      {% else %}
+        <li class="empty">No events yet.</li>
+      {% endfor %}
+    </ul>
+  </section>
+</div>
+
+<section class="card">
+  <h2>Tasks</h2>
+  <table class="table">
+    <thead><tr><th>Seq</th><th>Kind</th><th>Worker</th><th>Title</th><th>Route</th><th>Attempts</th><th>Status</th></tr></thead>
+    <tbody>
+    {% for task in tasks %}
+      <tr>
+        <td class="mono">{{ '%02d' % task.seq }}</td>
+        <td><span class="tag">{{ task.kind }}</span></td>
+        <td class="mono small">{{ task.worker }}</td>
+        <td>{{ task.title }}</td>
+        <td class="muted small mono">{{ task.route }}</td>
+        <td class="mono">{{ task.attempts }}</td>
+        <td><span class="badge {{ task.status }}">{{ task.status }}</span>
+          {% if task.error %}<div class="muted small">{{ task.error[:120] }}</div>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
+{% block scripts %}<script>HCVF.liveFeed();</script>{% endblock %}
