@@ -2,6 +2,39 @@
 
 All notable changes are recorded here. The project follows semantic versioning.
 
+## [0.13.0] - 2026-11-04
+
+### Added
+
+- **Background agent runtime** (`worker/agent_runtime.py`): per-worker fleets,
+  atomic queue claims, 30s lease renewal while executing, 15s lease reaper,
+  heartbeats into `agent_heartbeats` (migration 0014), graceful SIGTERM shutdown,
+  `--once` mode, and a compose `agents` service with a heartbeat healthcheck.
+- **Durable task queue** (`app/services/task_queue.py`): dependency-aware
+  readiness across objectives, worker-affinity claims, release/renew/reclaim,
+  queue depth, heartbeat upsert/list.
+- **Fleet administration API**: `GET /api/v1/admin/agents` (fleet, stale flags,
+  queue depth, configured pools), `/admin/queue`, `POST /admin/queue/reap`.
+- **Objective depth** (`app/engine/workforce/depth.py`): surface/standard/deep
+  profiles controlling adaptive task caps, coverage breadth and which severities
+  require independent verification (deep verifies medium too). Stored on
+  `objectives.depth`, accepted/exposed by the API, applied by both planners.
+- **Inline fleet option** for single-process deployments
+  (`HCVF_AGENT_RUNTIME_INLINE`).
+- `docs/AGENTS.md` and compose service definition.
+
+### Changed
+
+- `ObjectiveService` exposes `execute_claimed()`; `run_step` now delegates to the
+  same `_run_claimed` path the runtime uses, so API and background execution are
+  one code path.
+- Supervisor verification thresholds come from the objective's depth profile.
+
+### Fixed
+
+- Task execution can now survive a process crash: expired leases are reclaimed
+  automatically instead of stranding rows in `running`.
+
 ## [0.12.0] - 2026-11-04
 
 ### Added

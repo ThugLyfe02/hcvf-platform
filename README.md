@@ -205,7 +205,7 @@ worker/              Celery task, scheduler loop (outbox relay + reaper)
 alembic/             6 migrations, single head
 scripts/             preflight, diagnostics, bootstrap, smoke, alembic graph check
 tests/unit/          66 tests, no external services required
-docs/                architecture, agentic design, objectives, workers, adaptive, console, ADRs
+docs/                architecture, agentic design, objectives, workers, adaptive, agents, console, ADRs
 ```
 
 ## Development
@@ -243,6 +243,8 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`SECURITY.md`](SECURITY.md).
 | `PATCH /api/v1/findings/{id}`, `GET/POST .../notes` | validated triage with decision history |
 | `GET /api/v1/assets`, `/changes`, `/summary` | observed surface inventory and change feed |
 | `GET /api/v1/admin/outbox/dead`, `POST .../retry`, `.../discard` | dead-letter inspection and recovery |
+| `GET /api/v1/admin/agents`, `/admin/queue` | fleet heartbeats and queue depth |
+| `POST /api/v1/admin/queue/reap` | manual expired-lease recovery |
 | `GET /api/v1/objectives/{id}/events/stream` | SSE of objective events |
 | `GET /api/v1/admin/export/{findings,audit,objectives}.csv` | signed CSV exports (admin) |
 | `GET /api/v1/admin/bundle/{id}.zip` | signed evidence + reports archive (admin) |
