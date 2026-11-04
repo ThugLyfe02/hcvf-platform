@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     objective_tasks_per_batch: int = 8
     #: Enforce PostgreSQL row-level security; bind app.tenant_id per request.
     rls_enabled: bool = False
+    #: Start the background agent fleet inside the scheduler process
+    #: (single-process deployments); production runs worker/agent_runtime.py.
+    agent_runtime_inline: bool = False
     evidence_key: str = ""
     #: Development only: permit the engine to reach private/loopback addresses.
     allow_private_targets: bool = False

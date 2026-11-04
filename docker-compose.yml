@@ -121,6 +121,41 @@ services:
       retries: 5
       start_period: 10s
 
+  agents:
+    build: .
+    container_name: hcvf-agents
+    restart: unless-stopped
+    command: python -m worker.agent_runtime
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment: *hcvf-env
+    volumes:
+      - evidence_data:/app/evidence
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          from datetime import UTC, datetime, timedelta
+          from sqlalchemy import func, select
+          from app.db.session import SessionLocal
+          from app.models import AgentHeartbeat
+          db = SessionLocal()
+          fresh = db.scalar(
+              select(func.count()).select_from(AgentHeartbeat).where(
+                  AgentHeartbeat.last_seen_at >= datetime.now(UTC) - timedelta(seconds=120)
+              )
+          )
+          raise SystemExit(0 if fresh else 1)
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
 volumes:
   postgres_data:
     name: hcvf-postgres-data

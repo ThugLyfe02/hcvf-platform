@@ -1,4 +1,5 @@
 from app.db.base import Base
+from app.models.agent import AgentHeartbeat
 from app.models.audit import AuditLog
 from app.models.autonomy import AutonomyDecision, AutonomyPolicy, HuntTarget
 from app.models.campaign import Campaign, CampaignStatus
@@ -13,6 +14,7 @@ from app.models.tenant import Tenant, TenantRole
 from app.models.triage import Asset, FindingNote
 
 __all__ = [
+    "AgentHeartbeat",
     "Asset",
     "AuditLog",
     "AutonomyDecision",

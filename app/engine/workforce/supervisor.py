@@ -258,7 +258,7 @@ class Supervisor:
         # Serious claims must be reproduced by an independent task before they
         # can contribute to "min_verified" or a finding-based criterion.
         if state.spec.kind is TaskKind.probe:
-            for finding in needs_verification(outcome.findings):
+            for finding in needs_verification(outcome.findings, severities=self._verify_severities()):
                 if any(
                     other.spec.kind is TaskKind.verify and other.spec.payload.get("fingerprint") == finding.fingerprint
                     for other in self.states.values()
@@ -288,6 +288,13 @@ class Supervisor:
                 state.spec = task
                 updated += 1
         return updated
+
+    def _verify_severities(self) -> tuple[str, ...]:
+        """Deep objectives verify medium findings too; surface ones only critical."""
+
+        from app.engine.workforce.depth import profile
+
+        return tuple(profile(getattr(self.spec, "depth", "standard")).verify_severities)
 
     # -- diagnosis -------------------------------------------------------
     def _schedule_diagnosis(self, failed: TaskState) -> tuple[TaskSpec, ...]:
@@ -409,7 +416,7 @@ class Supervisor:
         for state in self.ordered():
             if state.outcome is None or state.spec.kind is not TaskKind.probe:
                 continue
-            for finding in needs_verification(state.outcome.findings):
+            for finding in needs_verification(state.outcome.findings, severities=self._verify_severities()):
                 already = any(
                     other.spec.kind is TaskKind.verify and other.spec.payload.get("fingerprint") == finding.fingerprint
                     for other in self.states.values()

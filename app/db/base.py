@@ -36,6 +36,7 @@ def utcnow() -> datetime:
 
 
 def import_models() -> None:
+    from app.models.agent import AgentHeartbeat
     from app.models.audit import AuditLog
     from app.models.autonomy import AutonomyDecision, AutonomyPolicy, HuntTarget
     from app.models.campaign import Campaign
@@ -70,4 +71,5 @@ def import_models() -> None:
         ObjectiveMemory,
         Asset,
         FindingNote,
+        AgentHeartbeat,
     )

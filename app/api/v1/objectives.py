@@ -27,6 +27,7 @@ class ObjectiveCreate(BaseModel):
     description: str = Field(default="", max_length=2000)
     target_url: str = Field(min_length=8, max_length=2048)
     template: str = Field(default="posture", pattern="^(posture|auth|exposure|coverage|adaptive|custom)$")
+    depth: str = Field(default="standard", pattern="^(surface|standard|deep)$")
     budget_requests: int = Field(default=120, ge=10, le=5000)
     per_task_budget: int = Field(default=20, ge=4, le=500)
     safety_ceiling: str = Field(default="read_only", pattern="^(read_only|state_changing)$")
@@ -41,6 +42,7 @@ class ObjectiveSummary(BaseModel):
     title: str
     target_url: str
     template: str
+    depth: str
     status: str
     priority: int
     verdict: str
@@ -72,6 +74,7 @@ def _summary(objective: Objective) -> ObjectiveSummary:
         title=objective.title,
         target_url=objective.target_url,
         template=objective.template,
+        depth=objective.depth,
         status=objective.status,
         priority=objective.priority,
         verdict=objective.verdict,
@@ -101,6 +104,7 @@ def create_objective(
             budget_requests=payload.budget_requests,
             per_task_budget=payload.per_task_budget,
             criteria_payload=payload.criteria,
+            depth=payload.depth,
             safety_ceiling=payload.safety_ceiling,
             priority=payload.priority,
             deadline_minutes=payload.deadline_minutes,

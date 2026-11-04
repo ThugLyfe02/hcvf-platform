@@ -231,10 +231,12 @@ class ObjectiveSpec:
     title: str
     target: str
     template: str
-    safety: SafetyClass
-    budget_requests: int
-    per_task_budget: int
-    criteria: tuple[Criterion, ...]
+    #: surface | standard | deep - declared thoroughness, drives planner caps.
+    depth: str = "standard"
+    safety: SafetyClass = SafetyClass.read_only
+    budget_requests: int = 120
+    per_task_budget: int = 20
+    criteria: tuple[Criterion, ...] = ()
     priority: int = 5
     deadline_minutes: int = 120
     description: str = ""
@@ -245,6 +247,7 @@ class ObjectiveSpec:
             "title": self.title,
             "target": self.target,
             "template": self.template,
+            "depth": self.depth,
             "safety": self.safety.name,
             "budget_requests": self.budget_requests,
             "per_task_budget": self.per_task_budget,

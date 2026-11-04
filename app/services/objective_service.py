@@ -50,6 +50,7 @@ from app.engine.workforce.decompose import (
     plan_objective,
     slugify,
 )
+from app.engine.workforce.depth import profile as depth_profile
 from app.engine.workforce.replan import belief_from_outcomes, plan_adaptive
 from app.engine.workforce.supervisor import Supervisor, TaskState
 from app.engine.workforce.surface import build_surface
@@ -125,6 +126,7 @@ class ObjectiveService:
         priority: int,
         deadline_minutes: int,
         description: str,
+        depth: str = "standard",
         actor: str,
         request_id: str | None = None,
         origin: str = "delegated",
@@ -144,6 +146,8 @@ class ObjectiveService:
             raise ObjectiveError("budget_requests must be between 10 and 5000")
         if not 4 <= per_task_budget <= 500:
             raise ObjectiveError("per_task_budget must be between 4 and 500")
+        if depth not in {"surface", "standard", "deep"}:
+            raise ObjectiveError("depth must be surface, standard or deep")
 
         if not CampaignService._is_authorized_target(target_url, tenant.authorized_targets):
             raise ObjectiveError("objective target is not authorized for this tenant")
@@ -163,6 +167,7 @@ class ObjectiveService:
             title=cleaned_title,
             target=target.origin,
             template=template,
+            depth=depth,
             safety=SafetyClass[safety_ceiling],
             budget_requests=budget_requests,
             per_task_budget=per_task_budget,
@@ -184,6 +189,7 @@ class ObjectiveService:
             description=spec.description,
             target_url=target.url,
             template=template,
+            depth=depth,
             status=ObjectiveStatus.queued.value,
             safety_ceiling=safety_ceiling,
             budget_requests=budget_requests,
@@ -298,6 +304,7 @@ class ObjectiveService:
             title=objective.title,
             target=target.origin,
             template=objective.template,
+            depth=objective.depth,
             safety=SafetyClass[objective.safety_ceiling],
             budget_requests=objective.budget_requests,
             per_task_budget=objective.per_task_budget,
@@ -439,7 +446,31 @@ class ObjectiveService:
             # Every ready task was claimed by another worker a moment ago.
             return StepResult(objective.id, "", TaskStatus.running.value, supervisor.verdict(), objective.requests_used)
         supervisor, task, task_row = claimed
+        return self._run_claimed(objective, supervisor, task, task_row)
 
+    def execute_claimed(self, objective: Objective, task_key: str) -> StepResult | None:
+        """Execute a task already claimed from the queue by a background agent.
+
+        The runtime claims first (atomic, leased), then calls this with a fresh
+        session. If the row is no longer running the call is a no-op: a reclaimed
+        or cancelled task must not be executed behind the queue's back.
+        """
+
+        supervisor = self._supervisor(objective)
+        try:
+            state = supervisor.get(task_key)
+        except KeyError:
+            return None
+        task_row = self.db.scalar(
+            select(ObjectiveTask).where(ObjectiveTask.objective_id == objective.id, ObjectiveTask.key == task_key)
+        )
+        if task_row is None or task_row.status != TaskStatus.running.value:
+            return None
+        return self._run_claimed(objective, supervisor, state, task_row)
+
+    def _run_claimed(
+        self, objective: Objective, supervisor: Supervisor, task: TaskState, task_row: ObjectiveTask
+    ) -> StepResult:
         if objective.status == ObjectiveStatus.queued.value:
             objective.status = ObjectiveStatus.running.value
             objective.started_at = objective.started_at or datetime.now(UTC)
@@ -751,7 +782,8 @@ class ObjectiveService:
         allowed = tuple(probe_id for probe_id, probe_class in registry().items() if probe_class.spec.safety <= ceiling)
         remaining_seq = max(task.seq for task in self.tasks(objective.id)) + 1
         budget_left = max(0, objective.budget_requests - objective.requests_used)
-        max_tasks = min(12, budget_left // max(4, objective.per_task_budget))
+        depth_cap = depth_profile(objective.depth).coverage_max_tasks
+        max_tasks = min(depth_cap, budget_left // max(4, objective.per_task_budget))
         if max_tasks < 1:
             return 0
         origin = parse_target(objective.target_url).origin
@@ -761,7 +793,7 @@ class ObjectiveService:
             allowed_probes=allowed,
             start_seq=remaining_seq,
             per_task_budget=objective.per_task_budget,
-            max_routes=6,
+            max_routes=depth_profile(objective.depth).coverage_max_routes,
             max_tasks=max_tasks,
             recon_key="",
         )
@@ -811,10 +843,15 @@ class ObjectiveService:
             return 0
         existing = self.tasks(objective.id)
         adaptive_so_far = [task for task in existing if (task.payload or {}).get("adaptive")]
-        if len(adaptive_so_far) >= 10:
+        depth_cap = depth_profile(objective.depth).adaptive_max_tasks
+        if len(adaptive_so_far) >= depth_cap:
             return 0
         budget_left = objective.budget_requests - objective.requests_used
-        max_tasks = min(max_new, 10 - len(adaptive_so_far), budget_left // max(4, objective.per_task_budget))
+        max_tasks = min(
+            max_new,
+            depth_cap - len(adaptive_so_far),
+            budget_left // max(4, objective.per_task_budget),
+        )
         if max_tasks < 1:
             return 0
 

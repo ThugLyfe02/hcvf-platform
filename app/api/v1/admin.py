@@ -26,6 +26,7 @@ from app.core.config import settings
 from app.core.security import require_admin
 from app.db.session import get_db
 from app.models import AuditLog, Finding, Objective, Outbox, Tenant
+from app.services import task_queue
 from app.services.audit_service import AuditService
 from app.services.objective_artifacts import build_markdown, build_sarif, sign, write_artifacts
 from app.services.objective_service import ObjectiveService
@@ -300,3 +301,55 @@ def outbox_discard(
     )
     db.commit()
     return {"id": str(entry.id), "status": "discarded"}
+
+
+@router.get("/agents")
+def agents_status(
+    tenant: Tenant = Depends(require_admin),
+    db: Session = Depends(get_db),
+    worker: str = Query(default=""),
+) -> dict[str, object]:
+    """Live view of the background fleet and the queue it is draining."""
+
+    from app.services.agent_pools import running_pools
+
+    agents = task_queue.agents(db, worker=worker or None)
+    return {
+        "agents": agents,
+        "online": sum(1 for agent in agents if not agent["stale"]),
+        "stale": sum(1 for agent in agents if agent["stale"]),
+        "queue": task_queue.depth(db).to_dict(),
+        "configured_pools": running_pools(),
+        "stale_after_seconds": task_queue.HEARTBEAT_STALE_SECONDS,
+    }
+
+
+@router.get("/queue")
+def queue_depth(
+    tenant: Tenant = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, int]:
+    return task_queue.depth(db).to_dict()
+
+
+@router.post("/queue/reap")
+def queue_reap(
+    request: Request,
+    tenant: Tenant = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Manually recover expired leases (the runtime also does this every 15s)."""
+
+    recovered = task_queue.reclaim_expired(db)
+    if recovered:
+        AuditService(db).record(
+            tenant_id=tenant.id,
+            action="queue.reap",
+            details={"recovered": recovered},
+            user_id=getattr(request.state, "actor", "admin"),
+            resource_type="queue",
+            resource_id="objective_tasks",
+            request_id=getattr(request.state, "request_id", None),
+        )
+        db.commit()
+    return {"recovered": recovered, "count": len(recovered)}

@@ -18,6 +18,9 @@ from app.engine.workforce.types import (
     TaskStatus,
 )
 
+#: Severities that must be independently reproduced by default.
+DEFAULT_VERIFY_SEVERITIES = ("critical", "high")
+
 
 @dataclass
 class EvidenceBundle:

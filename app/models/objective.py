@@ -22,6 +22,8 @@ class Objective(TimestampMixin, UUIDPrimaryKeyMixin, Base):
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     target_url: Mapped[str] = mapped_column(String(2048), nullable=False)
     template: Mapped[str] = mapped_column(String(32), nullable=False, default="posture")
+    #: surface | standard | deep - declared thoroughness, used by planners.
+    depth: Mapped[str] = mapped_column(String(16), nullable=False, default="standard")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
     safety_ceiling: Mapped[str] = mapped_column(String(32), nullable=False, default="read_only")
     budget_requests: Mapped[int] = mapped_column(Integer, nullable=False, default=120)

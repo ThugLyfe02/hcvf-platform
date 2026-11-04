@@ -9,6 +9,7 @@ from app.db.session import SessionLocal
 from app.services.campaign_service import CampaignService
 from app.services.outbox import dispatch_pending
 from app.services.reaper import reap_stale_runs
+from worker.agent_runtime import AgentRuntime, pools_from_env
 from worker.autonomy import maybe_tick as autonomy_tick
 from worker.objectives import maybe_tick as objective_tick
 from worker.tasks import execute_campaign, publish_outbox_message
@@ -49,6 +50,10 @@ def dispatch_due_campaigns() -> int:
 def main() -> None:
     setup_logging()
     logger.info("scheduler started (outbox relay + reaper + autonomy controller)")
+    runtime = None
+    if settings.agent_runtime_inline:
+        runtime = AgentRuntime(pools=pools_from_env())
+        runtime.start()
     while True:
         try:
             relay_outbox()
